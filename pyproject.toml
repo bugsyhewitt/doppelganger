@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doppelganger"
+version = "0.1.0"
+description = "Headless HTTP/1.1 request-smuggling / desync detection and differential confirmation for authorized bug-bounty and pentest engagements."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Bugsy Hewitt" }]
+keywords = [
+    "http",
+    "request-smuggling",
+    "desync",
+    "security",
+    "scanner",
+    "bug-bounty",
+    "cwe-444",
+]
+dependencies = [
+    # httpx backs the baseline/differential *well-formed* request path only.
+    # The desync probes are raw by necessity (byte-exact CL/TE) and use the
+    # stdlib socket layer in rawsend.py -- no extra runtime dep for that.
+    "httpx>=0.27",
+    "h1-reporter @ git+https://github.com/bugsyhewitt/h1-reporter",
+    # TODO(v0.1): scope enforcement + the well-formed baseline/differential
+    # client come from scan-primitives. Add it as a dep once the shared lib is
+    # published; it is intentionally NOT installed in this scaffold pass:
+    #   "scan-primitives @ git+https://github.com/bugsyhewitt/scan-primitives",
+]
+
+[project.optional-dependencies]
+# pytest-socket lets the (future) engine tests assert that a scope-blocked
+# probe never opens a socket -- the same egress-blocking guarantee scan-primitives
+# ships (see scan-primitives/SPEC.md Testability).
+dev = ["pytest>=7.0", "pytest-socket"]
+test = ["pytest>=7.0", "pytest-socket"]
+
+[project.urls]
+Homepage = "https://github.com/bugsyhewitt/doppelganger"
+Repository = "https://github.com/bugsyhewitt/doppelganger"
+
+[project.scripts]
+doppelganger = "doppelganger.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "ship_gate: v0.1 release ship-gate (slow; runs build + fresh-venv install)",
+    "integration: requires the docker-compose discrepant-pair lab (not built in the scaffold; see V0.1-CRITERIA.md Testability)",
+]

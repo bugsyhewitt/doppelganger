@@ -1,0 +1,24 @@
+doppelganger
+Copyright (c) 2026 Bugsy Hewitt
+
+This product resurrects the dead-ancestor tool smuggler.py and implements
+published HTTP request-smuggling research.
+
+Dead ancestor
+-------------
+smuggler.py -- https://github.com/defparam/smuggler (by @defparam)
+  Reference for the CL.TE / TE.CL baseline and the transfer-encoding mutation
+  dictionary. doppelganger reimplements and extends this coverage; no source is
+  vendored.
+
+Research attribution
+--------------------
+The detection and differential-confirmation techniques implement the published
+research of James Kettle / PortSwigger Research:
+  - "HTTP Desync Attacks: Request Smuggling Reborn"
+  - "HTTP/2: The Sequel is Always Worse"
+  - "Browser-Powered Desync Attacks"
+  - "Smashing the State Machine"
+
+No Burp Suite or HTTP Request Smuggler (BApp) code is used or vendored.
+Techniques are implemented independently from the public write-ups.
