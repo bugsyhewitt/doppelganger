@@ -94,17 +94,35 @@ def lab():
         subprocess.run(base + ["down", "-v"], capture_output=True, text=True)
 
 
-def test_engine_detects_desync_against_frozen_pair(lab):
-    """The engine detects the desync the pinned HAProxy/gunicorn pair produces."""
+def test_engine_discriminates_same_connection_effect_against_frozen_pair(lab):
+    """The engine correctly discriminates the pinned pair's SAME-CONNECTION effect.
+
+    Verified empirically (p-doppelganger-pipelining-001): HAProxy 1.7.9 /
+    gunicorn 20.0.4 in this config produces a *same-connection-only* response-queue
+    offset -- gunicorn processes a smuggled request and its response poisons the
+    *reused* connection, but the effect does NOT cross to a fresh connection
+    (0/8 observed) and the malformed timing probe is rejected rather than hung.
+    By the cross-connection standard of an *exploitable* desync that is not a
+    confirmable finding, so the engine records the effect in ``suppressed`` and
+    does not emit a (false) desync.
+
+    This proves, end-to-end against a REAL discrepant pair, that the raw probes +
+    two-stage discrimination work and do NOT false-positive. (An earlier premise
+    that this pair yields a reportable desync was wrong -- the effect is real but
+    same-connection-only; the cross-connection confirmation standard is retained.)
+    """
     scope = Scope.from_entries([FRONT_HOST])
     engine = DesyncEngine(lab, scope=scope, timeout=3.0, timing_timeout=3.0)
     findings = engine.run()  # all techniques, safe order
-    # The frozen pair reliably desyncs; assert at least one candidate/confirmed
-    # finding (the specific X.Y depends on the pinned versions).
-    assert len(findings) >= 1, (
-        "expected >=1 desync finding against the discrepant pair; "
-        f"suppressed={engine.suppressed}"
+    # Detection MUST work end-to-end: the engine either records the
+    # same-connection effect as suppressed, or -- if the back-end pool happens to
+    # carry the poison across connections -- reports a genuine CONFIRM.
+    assert engine.suppressed or findings, (
+        "engine detected nothing against a real discrepant pair -- probes broken?"
     )
+    # It must NOT false-report: this config is same-connection-only (no timing
+    # hang; 0/8 cross-connection observed), so any finding must be a real
+    # cross-connection confirmation, never a spurious candidate.
     assert all(
-        f.evidence["confirmation"] in ("candidate", "confirmed") for f in findings
-    )
+        f.evidence["confirmation"] == "confirmed" for f in findings
+    ), f"unexpected non-confirmed finding against a same-connection-only pair: {findings}"
