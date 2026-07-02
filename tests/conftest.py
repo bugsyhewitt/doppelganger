@@ -1,16 +1,29 @@
 """Shared pytest fixtures for the doppelganger test suite.
 
-The scaffold has no live-target fixtures (the docker discrepant-pair lab and the
-in-process raw-socket mock pair are v0.1 work -- see V0.1-CRITERIA.md
-Testability). These fixtures build representative :class:`Finding` objects so the
-finding / SARIF / HackerOne-markdown layer is exercised end to end.
+Provides representative :class:`Finding` objects (for the reporting layer) and a
+scoped :class:`~scan_primitives.Scope` for 127.0.0.1 (for the engine tests that
+drive the in-process raw-socket mock pair -- see ``mockpair.py``).
 """
 
 from __future__ import annotations
 
+import pathlib
+import sys
+
 import pytest
 
+# Make the in-process mock pair (tests/mockpair.py) importable as ``mockpair``.
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+
+from scan_primitives import Scope
+
 from doppelganger.findings import Finding
+
+
+@pytest.fixture
+def loopback_scope() -> Scope:
+    """A scope authorizing only 127.0.0.1 -- the mock pair's address."""
+    return Scope.from_entries(["127.0.0.1"])
 
 
 @pytest.fixture

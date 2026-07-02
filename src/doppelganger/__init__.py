@@ -8,10 +8,12 @@ discrimination and safe-testing defaults. Findings are emitted in the pinned
 suite schema (CWE-444) plus SARIF 2.1.0 and HackerOne markdown via
 ``h1-reporter``.
 
-Scaffold status: the finding / SARIF / HackerOne reporting layer is fully
-implemented. The desync probe engine, the byte-exact raw-socket transport
-(``rawsend``), and the scan-primitives-backed baseline client (``client``) are
-stubbed pending the v0.1 build. See ``V0.1-CRITERIA.md``.
+The v0.1 engine is built: a two-stage detector (``engine``) drives byte-exact
+raw probes (``rawsend``) for timing detection and differential confirmation with
+pipelining false-positive discrimination, backed by the scope-enforcing
+``scan-primitives`` client (``client``) for well-formed baseline traffic.
+Findings emit to the pinned schema (``findings``) + SARIF (``sarif``) + HackerOne
+markdown (``reporting``). See ``V0.1-CRITERIA.md``.
 
 Authorized use only: this tool sends live probes to a target and can disrupt
 shared back-ends if used carelessly. Only test systems you are authorized to

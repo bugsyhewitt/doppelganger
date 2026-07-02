@@ -25,18 +25,18 @@ dependencies = [
     # stdlib socket layer in rawsend.py -- no extra runtime dep for that.
     "httpx>=0.27",
     "h1-reporter @ git+https://github.com/bugsyhewitt/h1-reporter",
-    # TODO(v0.1): scope enforcement + the well-formed baseline/differential
-    # client come from scan-primitives. Add it as a dep once the shared lib is
-    # published; it is intentionally NOT installed in this scaffold pass:
-    #   "scan-primitives @ git+https://github.com/bugsyhewitt/scan-primitives",
+    # scope enforcement + the well-formed baseline/differential client come from
+    # scan-primitives (the shared, audited safety-critical primitive). The raw
+    # desync sender honours the SAME Scope object -- see rawsend.py / client.py.
+    "scan-primitives @ git+https://github.com/bugsyhewitt/scan-primitives",
 ]
 
 [project.optional-dependencies]
 # pytest-socket lets the (future) engine tests assert that a scope-blocked
 # probe never opens a socket -- the same egress-blocking guarantee scan-primitives
 # ships (see scan-primitives/SPEC.md Testability).
-dev = ["pytest>=7.0", "pytest-socket"]
-test = ["pytest>=7.0", "pytest-socket"]
+dev = ["pytest>=7.0", "pytest-socket", "build>=1.0"]
+test = ["pytest>=7.0", "pytest-socket", "build>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/bugsyhewitt/doppelganger"

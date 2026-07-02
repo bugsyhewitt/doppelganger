@@ -11,13 +11,6 @@ safe-testing defaults. That confirmation/correctness layer is the thing
 `smuggler.py` never had and the reason its raw output can't be trusted against
 real targets.
 
-> **Scaffold status.** This repository is currently the package *scaffold*: the
-> finding schema, SARIF 2.1.0, and HackerOne-markdown reporting layer are
-> implemented and tested; the desync **probe engine** and the byte-exact
-> **raw-socket transport** are stubbed. Running a scan raises
-> `NotImplementedError`. See [`V0.1-CRITERIA.md`](V0.1-CRITERIA.md) for the build
-> contract.
-
 ## Ethical Use
 
 You are responsible for ensuring you have authorization to test any target.
@@ -69,9 +62,11 @@ leave the host. Scope handling comes from the shared `scan-primitives` library
 doppelganger --scope-file scope.txt --technique CL.TE https://target.example.com/
 ```
 
-> The scan path is **not yet implemented** in the scaffold; the flags below are
-> the v0.1 CLI contract and are wired, but invoking a probe currently raises
-> `NotImplementedError`. `--version` and `--help` work fully.
+The scan runs a two-stage engine per technique: a timing probe raises a
+**candidate**, and a differential-response probe upgrades it to **confirmed**.
+Any effect that reproduces *only* under client-side connection reuse is
+discriminated as pipelining and is **not** reported as a desync. Exit code is `1`
+when any finding is produced, `0` when clean, `3` on a scope/target error.
 
 ### Options
 
@@ -94,30 +89,32 @@ URL                        target URL to probe (positional)
 
 | Technique | Discrepancy | v0.1 |
 |-----------|-------------|------|
-| `CL.TE`   | Front-end uses Content-Length, back-end uses Transfer-Encoding | pending |
-| `TE.CL`   | Front-end uses Transfer-Encoding, back-end uses Content-Length | pending |
-| `TE.TE`   | Both use TE, one is fooled by an obfuscated header | pending |
-| `CL.0`    | Content-Length honoured by front-end, treated as 0 by back-end | pending |
-| `dup-CL`  | Two conflicting Content-Length headers | pending |
+| `CL.TE`   | Front-end uses Content-Length, back-end uses Transfer-Encoding | yes |
+| `TE.CL`   | Front-end uses Transfer-Encoding, back-end uses Content-Length | yes |
+| `TE.TE`   | Both use TE, one is fooled by an obfuscated header (8-entry dictionary) | yes |
+| `CL.0`    | Content-Length honoured by front-end, treated as 0 by back-end | yes |
+| `dup-CL`  | Two conflicting Content-Length headers | yes |
 
 All HTTP/2 techniques (H2.CL, H2.TE, H2 tunnelling, downgrade desync) are
 **out of scope for v0.1** -- see Roadmap.
 
 ## Modules
 
-| Module | Status | Responsibility |
-|--------|--------|----------------|
-| `doppelganger.findings`  | implemented | The pinned suite `Finding` contract (CWE-444), severity/confidence vocabularies. |
-| `doppelganger.sarif`     | implemented | `to_sarif(findings) -> dict` -- SARIF 2.1.0 document. |
-| `doppelganger.reporting` | implemented | `to_h1md(findings) -> str` -- HackerOne markdown via `h1-reporter`. |
-| `doppelganger.cli`       | scaffold | argparse CLI; `--version`/`--help` work, scan path stubbed. |
-| `doppelganger.rawsend`   | **stub** | Byte-exact raw-socket HTTP/1.1 probe transport (no header normalisation). |
-| `doppelganger.client`    | **stub** | `scan-primitives`-backed well-formed baseline/differential client. |
+| Module | Responsibility |
+|--------|----------------|
+| `doppelganger.findings`   | The pinned suite `Finding` contract (CWE-444), severity/confidence vocabularies. |
+| `doppelganger.sarif`      | `to_sarif(findings) -> dict` -- SARIF 2.1.0 document. |
+| `doppelganger.reporting`  | `to_h1md(findings) -> str` -- HackerOne markdown via `h1-reporter`. |
+| `doppelganger.techniques` | Byte-exact probe payloads per technique + the TE.TE obfuscation dictionary. |
+| `doppelganger.rawsend`    | Byte-exact raw-socket HTTP/1.1 transport (no normalisation), scope-enforced, with connection-reuse control. |
+| `doppelganger.client`     | `scan-primitives`-backed, scope-enforcing well-formed baseline client. |
+| `doppelganger.engine`     | Two-stage detector: timing detection -> differential confirmation + pipelining discrimination. |
+| `doppelganger.cli`        | argparse CLI. |
 
 Two transports on purpose: a normalising high-level client **cannot** carry a
 smuggling probe (it would rewrite the malformed framing under test), so probes go
-through the raw sender while baseline/differential requests go through the
-scope-aware client. Both share one `Scope`.
+through the raw sender while baseline requests go through the scope-aware client.
+Both share one `Scope`, so scope is enforced before egress on **every** path.
 
 ## Example output
 
@@ -125,25 +122,31 @@ A confirmed CL.TE finding, as it will render (`--format json`):
 
 ```json
 {
-  "id": "dg-0001",
+  "id": "dg-clte-0c249eb8",
   "tool": "doppelganger",
-  "title": "CL.TE request-smuggling desync confirmed",
+  "title": "CL.TE HTTP/1.1 request-smuggling desync confirmed",
   "severity": "high",
   "confidence": "high",
   "target": "https://target.example.com/",
   "vector": "CL.TE",
-  "variant": "chunked-body-CL0",
+  "variant": null,
   "cwe_id": 444,
   "evidence": {
-    "timing_delta_ms": 4800,
+    "discrepancy": "CL.TE",
     "confirmation": "confirmed",
     "connection_reuse": false,
-    "discrepancy": "CL.TE"
+    "timing_delta_ms": 400.4,
+    "request": "POST / HTTP/1.1\r\n...",
+    "reproduction": "POST / HTTP/1.1\r\n..."
   },
   "references": ["https://portswigger.net/research/http-desync-attacks-request-smuggling-reborn"],
   "created_at": "2026-07-02T00:00:00+00:00"
 }
 ```
+
+A timing-only **candidate** looks the same with `"confirmation": "candidate"`,
+`severity: "medium"`, `confidence: "low"`. Suppressed pipelining artifacts are
+reported separately under `suppressed_pipelining`, never as findings.
 
 The finding also serialises to SARIF 2.1.0 (`--format sarif`, for GitHub Code
 Scanning / IDEs) and HackerOne markdown (`--format h1md`).
@@ -151,13 +154,26 @@ Scanning / IDEs) and HackerOne markdown (`--format h1md`).
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest -m "not ship_gate"      # fast unit tests (finding / SARIF / h1md)
-pytest                          # full suite incl. the build+install ship gate
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"        # resolves scan-primitives + h1-reporter via git
+
+# Offline / local checkout of the sibling libs? Install them first, then
+# doppelganger with --no-deps so the git URLs are not fetched:
+#   pip install ../h1-reporter ../scan-primitives pytest pytest-socket build
+#   pip install --no-deps -e .
+
+pytest -m "not ship_gate and not integration"   # fast unit tests (mock pair)
+pytest -m ship_gate                              # build wheel, fresh-venv install, CLI proof
+pytest -m integration                            # docker discrepant-pair lab (needs docker)
 ```
 
-The `ship_gate` marker builds the wheel and installs it into a fresh venv; the
-`integration` marker (v0.1) will drive the docker-compose discrepant-pair lab.
+Tests use an **in-process raw-socket mock front/back pair** (`tests/mockpair.py`)
+with opposite length rules to synthesize any `X.Y` discrepancy deterministically
+-- proving detection, differential confirmation, and pipelining discrimination
+without container flakiness. The `ship_gate` marker builds the wheel and drives
+the installed CLI against the mock pair; the `integration` marker drives the
+docker-compose lab (pinned HAProxy 1.7.9 + gunicorn 20.0.4) and skips cleanly if
+docker is absent.
 
 ## Roadmap
 

@@ -1,31 +1,38 @@
 """doppelganger command-line interface.
 
-Scaffold status: the argument surface below is the v0.1 CLI contract from
-V0.1-CRITERIA.md -- target, technique selection, safe-testing mode,
-connection-reuse control, scope file, and output format. ``--version`` and
-``--help`` work fully. The scan path is **stubbed**: invoking a probe raises
-``NotImplementedError`` because the desync engine and the raw-socket transport
-are not built in this pass. See V0.1-CRITERIA.md.
+The argument surface below is the v0.1 CLI contract from V0.1-CRITERIA.md --
+target, technique selection, safe-testing mode, connection-reuse control, scope
+file, and output format. ``--version`` and ``--help`` work fully. A scan drives
+:class:`doppelganger.engine.DesyncEngine` (two-stage timing detection ->
+differential confirmation with pipelining discrimination) and emits findings in
+the requested format.
 
 [Worker decision: argparse, not Click -- mirrors ferryman/enshroud and keeps the
 dependency surface tight.]
 
-Exit codes (planned, once the engine lands):
-    0  scan completed, no findings at/above --fail-on
-    1  --fail-on threshold met
+Exit codes:
+    0  scan completed, no desync findings
+    1  scan completed, one or more desync findings (candidate or confirmed)
     2  usage / argument error (argparse default)
-    3  scope file / target could not be read
+    3  scope file / target could not be read, or a target was out of scope
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from typing import Sequence
+from urllib.parse import urlsplit
+
+from scan_primitives import OutOfScopeError, load_scope
 
 from doppelganger import __version__
-from doppelganger.findings import TECHNIQUES
-
-_NOT_BUILT = "v0.1 build -- see V0.1-CRITERIA.md"
+from doppelganger.engine import DesyncEngine
+from doppelganger.findings import TECHNIQUES, Finding
+from doppelganger.reporting import to_h1md
+from doppelganger.sarif import to_sarif
+from doppelganger.techniques import all_techniques, technique_by_name
 
 # Technique selection: the HTTP/1.1 desync family (criterion 1) plus "all".
 _TECHNIQUE_CHOICES = (*TECHNIQUES, "all")
@@ -119,14 +126,72 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _render(findings: list[Finding], output_format: str, suppressed: list[dict]) -> str:
+    """Render findings in the requested output format."""
+    if output_format == "sarif":
+        return json.dumps(to_sarif(findings), indent=2)
+    if output_format == "h1md":
+        return to_h1md(findings)
+    # json (default): doppelganger's own finding documents.
+    return json.dumps(
+        {
+            "tool": "doppelganger",
+            "finding_count": len(findings),
+            "findings": [f.to_dict() for f in findings],
+            "suppressed_pipelining": suppressed,
+        },
+        indent=2,
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     """Execute a scan for the parsed args.
 
-    STUB: the desync probe engine, timing detection, differential confirmation,
-    pipelining discrimination, and the raw-socket transport are not built in
-    this scaffold pass. Raises :class:`NotImplementedError`.
+    Loads the scope (required -- scope enforcement precedes any probe), drives the
+    two-stage desync engine over the selected technique(s), and prints findings in
+    the requested format. Returns an exit code per the module docstring.
     """
-    raise NotImplementedError(_NOT_BUILT)
+    # Scope is mandatory: no probe -- raw or well-formed -- leaves the host
+    # without a scope check first (criterion 4 / Safety).
+    if not args.scope_file:
+        print(
+            "error: --scope-file is required; scope is enforced before any probe",
+            file=sys.stderr,
+        )
+        return 3
+    try:
+        scope = load_scope(args.scope_file)
+    except OSError as exc:
+        print(f"error: could not read scope file: {exc}", file=sys.stderr)
+        return 3
+
+    if not urlsplit(args.target).hostname:
+        print(f"error: could not parse target URL: {args.target!r}", file=sys.stderr)
+        return 3
+
+    if args.technique == "all":
+        techniques = all_techniques()
+    else:
+        techniques = technique_by_name(args.technique)
+
+    engine = DesyncEngine(
+        args.target,
+        scope=scope,
+        timeout=args.timeout,
+        safe=args.safe,
+        reuse_connection=args.reuse_connection,
+    )
+    try:
+        findings = engine.run(techniques)
+    except OutOfScopeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except OSError as exc:
+        print(f"error: could not reach target {args.target!r}: {exc}", file=sys.stderr)
+        return 3
+
+    print(_render(findings, args.output_format, engine.suppressed))
+    return 1 if findings else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

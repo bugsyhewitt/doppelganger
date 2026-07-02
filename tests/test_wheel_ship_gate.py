@@ -2,14 +2,14 @@
 
 Skippable via ``pytest -m "not ship_gate"``. Runs in the full v0.1 suite.
 
-Mirrors ferryman's ship gate. The final "produce a real finding against a lab"
-step is intentionally a skip TODO: the desync probe engine and the
-docker-compose discrepant-pair lab are not built in the scaffold pass (see
-V0.1-CRITERIA.md Testability).
+Mirrors ferryman's ship gate. The final step drives the *installed* CLI against
+the in-process raw-socket mock pair and asserts it emits a confirmed CL.TE
+finding -- the end-to-end "the shipped wheel actually detects a desync" proof.
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import venv
@@ -17,7 +17,12 @@ from pathlib import Path
 
 import pytest
 
+import mockpair
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# Sibling shared libs, installed locally so the git-URL deps in pyproject.toml
+# need not be fetched from GitHub during the ship gate.
+_SIBLINGS = [REPO_ROOT.parent / "h1-reporter", REPO_ROOT.parent / "scan-primitives"]
 
 
 def _run(cmd, **kw):
@@ -51,11 +56,18 @@ def test_wheel_installs_into_fresh_venv(tmp_path):
     if wheel is None:
         pytest.skip("preceding build test did not produce a wheel")
 
+    missing = [str(s) for s in _SIBLINGS if not s.exists()]
+    if missing:
+        pytest.skip(f"local sibling libs not found: {missing}")
+
     venv_dir = tmp_path / "fresh-venv"
     venv.create(venv_dir, with_pip=True, clear=True)
     pip = venv_dir / "bin" / "pip"
 
-    _run([str(pip), "install", "--quiet", str(wheel)])
+    # Install the shared libs locally first (pulls httpx), then the wheel with
+    # --no-deps so the git-URL deps in pyproject.toml are not fetched.
+    _run([str(pip), "install", "--quiet", *[str(s) for s in _SIBLINGS]])
+    _run([str(pip), "install", "--quiet", "--no-deps", str(wheel)])
 
     cli = venv_dir / "bin" / "doppelganger"
     version_out = _run([str(cli), "--version"]).stdout.strip()
@@ -95,12 +107,41 @@ def test_installed_wheel_public_api(tmp_path):
 
 
 @pytest.mark.ship_gate
-def test_installed_wheel_produces_finding_against_lab(tmp_path):
-    """TODO(v0.1): run doppelganger against the docker discrepant-pair lab and
-    assert it emits a confirmed CL.TE (or TE.CL) finding, severity high.
+def test_installed_wheel_produces_finding_against_mock_pair(tmp_path):
+    """Run the INSTALLED CLI against the in-process mock pair; assert a finding.
 
-    Blocked in the scaffold: the desync probe engine, differential confirmation,
-    and the docker-compose lab (HAProxy 1.7.9 + gunicorn 20.0.4, frozen
-    versions) are not built. See V0.1-CRITERIA.md criteria 1-3 and Testability.
+    This is the end-to-end acceptance gate: the shipped wheel, invoked as the
+    ``doppelganger`` console script from a fresh venv, must detect and confirm a
+    CL.TE desync on a server-side-desync mock and emit it as a JSON finding.
     """
-    pytest.skip("v0.1 engine + docker discrepant-pair lab not built -- see V0.1-CRITERIA.md")
+    venv_dir = getattr(test_wheel_installs_into_fresh_venv, "_venv_dir", None)
+    if venv_dir is None:
+        pytest.skip("preceding install test did not build a venv")
+
+    cli = venv_dir / "bin" / "doppelganger"
+    scope_file = tmp_path / "scope.txt"
+    scope_file.write_text("127.0.0.1\n")
+
+    with mockpair.clte_pair("server_desync") as srv:
+        proc = subprocess.run(
+            [
+                str(cli),
+                srv.base_url,
+                "--scope-file", str(scope_file),
+                "--technique", "CL.TE",
+                "--format", "json",
+                "--timeout", "1.0",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    # Exit code 1 == findings were produced.
+    assert proc.returncode == 1, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+    doc = json.loads(proc.stdout)
+    assert doc["finding_count"] >= 1
+    finding = doc["findings"][0]
+    assert finding["vector"] == "CL.TE"
+    assert finding["evidence"]["confirmation"] == "confirmed"
+    assert finding["severity"] == "high"
+    assert finding["cwe_id"] == 444

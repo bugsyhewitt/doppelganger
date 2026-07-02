@@ -1,0 +1,25 @@
+# Discrepant-pair integration lab: pinned HAProxy 1.7.9 + gunicorn 20.0.4.
+#
+# The two parse HTTP/1.1 message length differently, reproducing a deterministic
+# desync (V0.1-CRITERIA.md Testability). Versions are frozen so the discrepancy
+# stays reproducible. Driven by tests/test_integration_lab.py (integration
+# marker; skipped unless docker is present).
+
+services:
+  backend:
+    image: python:3.9-slim
+    working_dir: /app
+    volumes:
+      - ./backend:/app:ro
+    command: >
+      sh -c "pip install --quiet --no-cache-dir gunicorn==20.0.4 &&
+             exec gunicorn --workers 2 --bind 0.0.0.0:8000 app:app"
+
+  haproxy:
+    image: haproxy:1.7.9
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:18080:80"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
