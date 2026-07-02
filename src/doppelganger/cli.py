@@ -30,12 +30,20 @@ from scan_primitives import OutOfScopeError, load_scope
 from doppelganger import __version__
 from doppelganger.engine import DesyncEngine
 from doppelganger.findings import TECHNIQUES, Finding
+from doppelganger.h2techniques import H2_TECHNIQUES, h2_technique_by_name
 from doppelganger.reporting import to_h1md
 from doppelganger.sarif import to_sarif
 from doppelganger.techniques import all_techniques, technique_by_name
 
-# Technique selection: the HTTP/1.1 desync family (criterion 1) plus "all".
-_TECHNIQUE_CHOICES = (*TECHNIQUES, "all")
+# NOTE: the H2 engine + send layer (doppelganger.h2engine / .h2send) pull the
+# hpack/h2 stack; they are imported LAZILY inside run() only when an H2 technique
+# is selected, so H1-only usage (and installs without the h2 extra) stay light.
+# h2techniques above is deliberately hpack-free at import time.
+
+# Technique selection: the HTTP/1.1 desync family (criterion 1), the v0.2
+# HTTP/2-downgrade family (H2.CL / H2.TE), plus "all" (HTTP/1.1 only -- H2
+# probes need an h2 front-end and are opt-in per technique).
+_TECHNIQUE_CHOICES = (*TECHNIQUES, *H2_TECHNIQUES, "all")
 
 # Output formats doppelganger emits (criterion 6).
 _FORMAT_CHOICES = ("json", "sarif", "h1md")
@@ -45,9 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="doppelganger",
         description=(
-            "Headless HTTP/1.1 request-smuggling / desync detector and "
-            "differential-confirmation tool. Detects CL.TE, TE.CL, TE.TE, "
-            "CL.0, and duplicate Content-Length desyncs with pipelining "
+            "Headless HTTP request-smuggling / desync detector and "
+            "differential-confirmation tool. Detects the HTTP/1.1 desync family "
+            "(CL.TE, TE.CL, TE.TE, CL.0, duplicate Content-Length) and the "
+            "HTTP/2-downgrade family (H2.CL, H2.TE) with pipelining "
             "false-positive discrimination and safe-testing defaults. "
             "Authorized targets only."
         ),
@@ -169,26 +178,58 @@ def run(args: argparse.Namespace) -> int:
         print(f"error: could not parse target URL: {args.target!r}", file=sys.stderr)
         return 3
 
-    if args.technique == "all":
-        techniques = all_techniques()
-    else:
-        techniques = technique_by_name(args.technique)
+    # Route H2-downgrade techniques (H2.CL / H2.TE) to the dedicated H2 engine
+    # (lazily imported); everything else stays on the audited v0.1 HTTP/1.1
+    # engine. Both engines expose the same run()/suppressed surface.
+    if args.technique in H2_TECHNIQUES:
+        from doppelganger.h2engine import H2DesyncEngine
+        from doppelganger.h2send import H2NotSupportedError
 
-    engine = DesyncEngine(
-        args.target,
-        scope=scope,
-        timeout=args.timeout,
-        safe=args.safe,
-        reuse_connection=args.reuse_connection,
-    )
-    try:
-        findings = engine.run(techniques)
-    except OutOfScopeError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 3
-    except OSError as exc:
-        print(f"error: could not reach target {args.target!r}: {exc}", file=sys.stderr)
-        return 3
+        engine = H2DesyncEngine(
+            args.target,
+            scope=scope,
+            timeout=args.timeout,
+            safe=args.safe,
+            reuse_connection=args.reuse_connection,
+        )
+        try:
+            findings = engine.run(h2_technique_by_name(args.technique))
+        except OutOfScopeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        except H2NotSupportedError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        except OSError as exc:
+            print(
+                f"error: could not reach target {args.target!r}: {exc}",
+                file=sys.stderr,
+            )
+            return 3
+    else:
+        engine = DesyncEngine(
+            args.target,
+            scope=scope,
+            timeout=args.timeout,
+            safe=args.safe,
+            reuse_connection=args.reuse_connection,
+        )
+        techniques = (
+            all_techniques()
+            if args.technique == "all"
+            else technique_by_name(args.technique)
+        )
+        try:
+            findings = engine.run(techniques)
+        except OutOfScopeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        except OSError as exc:
+            print(
+                f"error: could not reach target {args.target!r}: {exc}",
+                file=sys.stderr,
+            )
+            return 3
 
     print(_render(findings, args.output_format, engine.suppressed))
     return 1 if findings else 0

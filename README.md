@@ -72,8 +72,11 @@ when any finding is produced, `0` when clean, `3` on a scope/target error.
 
 ```
 URL                        target URL to probe (positional)
---technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,all}
-                           which desync technique to probe (default: all)
+--technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,H2.CL,H2.TE,all}
+                           which desync technique to probe (default: all).
+                           `all` covers the HTTP/1.1 family; the HTTP/2-downgrade
+                           techniques (H2.CL, H2.TE) are opt-in per technique
+                           (they need an HTTP/2 front-end)
 --scope-file FILE          authorization scope file (host / CIDR per line)
 --safe                     safe/production mode: per-probe connection isolation,
                            CL.TE before TE.CL, bounded+randomised timeouts
@@ -85,18 +88,33 @@ URL                        target URL to probe (positional)
 --version                  print "doppelganger 0.1.0"
 ```
 
-### Techniques (v0.1 target family)
+### Techniques
 
-| Technique | Discrepancy | v0.1 |
-|-----------|-------------|------|
-| `CL.TE`   | Front-end uses Content-Length, back-end uses Transfer-Encoding | yes |
-| `TE.CL`   | Front-end uses Transfer-Encoding, back-end uses Content-Length | yes |
-| `TE.TE`   | Both use TE, one is fooled by an obfuscated header (8-entry dictionary) | yes |
-| `CL.0`    | Content-Length honoured by front-end, treated as 0 by back-end | yes |
-| `dup-CL`  | Two conflicting Content-Length headers | yes |
+HTTP/1.1 desync family (v0.1):
 
-All HTTP/2 techniques (H2.CL, H2.TE, H2 tunnelling, downgrade desync) are
-**out of scope for v0.1** -- see Roadmap.
+| Technique | Discrepancy | Since |
+|-----------|-------------|-------|
+| `CL.TE`   | Front-end uses Content-Length, back-end uses Transfer-Encoding | v0.1 |
+| `TE.CL`   | Front-end uses Transfer-Encoding, back-end uses Content-Length | v0.1 |
+| `TE.TE`   | Both use TE, one is fooled by an obfuscated header (8-entry dictionary) | v0.1 |
+| `CL.0`    | Content-Length honoured by front-end, treated as 0 by back-end | v0.1 |
+| `dup-CL`  | Two conflicting Content-Length headers | v0.1 |
+
+HTTP/2-downgrade family (v0.2) -- an HTTP/2 front-end that forwards to an
+HTTP/1.1 back-end, desynced via a header the H2 layer never honours:
+
+| Technique | Discrepancy | Since |
+|-----------|-------------|-------|
+| `H2.CL`   | H2 request carries a `content-length` that disagrees with the DATA length; a vulnerable downgrade copies it into the HTTP/1.1 request | v0.2 |
+| `H2.TE`   | H2 request carries an (RFC-prohibited) `transfer-encoding: chunked`; a vulnerable downgrade copies it through | v0.2 |
+
+The H2 probes use a hand-rolled byte-exact HTTP/2 send layer, because the
+high-level H2 stacks *validate on send* and refuse the prohibited framing these
+attacks need. H2 detection is proven end-to-end against an in-process
+downgrade-mock; a live vulnerable proxy runs behind the `integration` marker.
+
+H2C cleartext-upgrade smuggling, client-side desync, and the parser-discrepancy
+engine remain out of scope -- see Roadmap.
 
 ## Modules
 
@@ -108,7 +126,10 @@ All HTTP/2 techniques (H2.CL, H2.TE, H2 tunnelling, downgrade desync) are
 | `doppelganger.techniques` | Byte-exact probe payloads per technique + the TE.TE obfuscation dictionary. |
 | `doppelganger.rawsend`    | Byte-exact raw-socket HTTP/1.1 transport (no normalisation), scope-enforced, with connection-reuse control. |
 | `doppelganger.client`     | `scan-primitives`-backed, scope-enforcing well-formed baseline client. |
-| `doppelganger.engine`     | Two-stage detector: timing detection -> differential confirmation + pipelining discrimination. |
+| `doppelganger.engine`     | Two-stage HTTP/1.1 detector: timing detection -> differential confirmation + pipelining discrimination. |
+| `doppelganger.h2send`     | Byte-exact HTTP/2 send layer (v0.2): literal HPACK + hand-built frames that carry the RFC-prohibited framing H2.CL/H2.TE need; ALPN `h2`; scope-enforced. |
+| `doppelganger.h2techniques` | H2.CL / H2.TE downgrade probe builders (v0.2). |
+| `doppelganger.h2engine`   | Two-stage HTTP/2-downgrade detector (v0.2), mirroring `engine` over the H2 transport. |
 | `doppelganger.cli`        | argparse CLI. |
 
 Two transports on purpose: a normalising high-level client **cannot** carry a
@@ -170,10 +191,14 @@ pytest -m integration                            # docker discrepant-pair lab (n
 Tests use an **in-process raw-socket mock front/back pair** (`tests/mockpair.py`)
 with opposite length rules to synthesize any `X.Y` discrepancy deterministically
 -- proving detection, differential confirmation, and pipelining discrimination
-without container flakiness. The `ship_gate` marker builds the wheel and drives
-the installed CLI against the mock pair; the `integration` marker drives the
-docker-compose lab (pinned HAProxy 1.7.9 + gunicorn 20.0.4) and skips cleanly if
-docker is absent.
+without container flakiness. The v0.2 H2 work adds an **in-process
+HTTP/2-downgrade mock** (`tests/h2mock.py`): a real H2 front-end that forwards a
+naively-downgraded HTTP/1.1 view to a discrepant back-end, driven by the actual
+byte-exact H2 send layer -- so H2.CL / H2.TE detection + confirmation are proven
+hermetically. The `ship_gate` marker builds the wheel and drives the installed
+CLI against the mock pair; the `integration` marker drives the docker-compose lab
+(pinned HAProxy 1.7.9 + gunicorn 20.0.4) plus the live-H2-proxy path, and skips
+cleanly if docker / a real proxy is absent.
 
 ## Roadmap
 
@@ -183,13 +208,18 @@ timing-detection -> differential-response confirmation, pipelining
 false-positive discrimination, safe-testing defaults, the raw-socket sender, and
 the docker CI lab.
 
-**Explicitly NOT in v0.1 (deferred):**
+**v0.2 (landed): HTTP/2-downgrade request smuggling (H2.CL, H2.TE).** A dedicated
+byte-exact H2 send layer (`h2send`) -- hand-rolled literal HPACK + frames,
+because the high-level H2 libraries validate on send and refuse the prohibited
+framing these attacks need -- plus a second two-stage engine (`h2engine`) for
+HTTP/2 front-end -> HTTP/1.1 back-end downgrade desync, wired to `--technique
+H2.CL` / `H2.TE`. Proven hermetically against an in-process downgrade mock; a
+live vulnerable proxy runs behind the `integration` marker.
 
-- **All HTTP/2** (H2.CL, H2.TE, H2 tunnelling/splitting, downgrade desync)
-  -> **v0.2, the highest-value follow-up.** Needs a separate low-level H2 stack
-  that cannot reuse the HTTP/1.1 raw sender (high-level libs validate on send and
-  refuse the prohibited headers these attacks need).
-- **H2C** cleartext-upgrade smuggling -> after H2 lands.
+**Still deferred:**
+
+- **H2C** cleartext-upgrade smuggling -> a separate edge-proxy-bypass attack
+  class; next after the H2-downgrade family.
 - **Client-side / browser-powered desync (CSD)** -> needs a victim browser; out
   of scope for a headless CLI.
 - **0.CL, double-desync, Expect-based desync, early-response gadgets**

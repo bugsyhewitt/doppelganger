@@ -24,6 +24,11 @@ dependencies = [
     # The desync probes are raw by necessity (byte-exact CL/TE) and use the
     # stdlib socket layer in rawsend.py -- no extra runtime dep for that.
     "httpx>=0.27",
+    # h2 (v0.2): pulls the hpack/hyperframe stack. doppelganger hand-rolls the
+    # *malformed* H2 send path (h2/httpx validate on send and refuse the
+    # prohibited framing H2.CL/H2.TE need) and uses hpack only to DECODE
+    # responses. See h2send.py.
+    "h2>=4.1",
     "h1-reporter @ git+https://github.com/bugsyhewitt/h1-reporter",
     # scope enforcement + the well-formed baseline/differential client come from
     # scan-primitives (the shared, audited safety-critical primitive). The raw
