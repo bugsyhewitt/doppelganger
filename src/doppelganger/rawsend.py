@@ -111,23 +111,79 @@ def _parse_framing(head: bytes) -> tuple[int | None, bool, bool]:
     return content_length, chunked, conn_close
 
 
-def _read_response(sock: socket.socket, deadline: float) -> tuple[bytes, bool, bool]:
-    """Read one HTTP/1.1 response with a hard deadline.
+def _status_code(head: bytes) -> int:
+    """Extract the HTTP status integer from a response head block (0 on parse error)."""
+    status_line = head.split(b"\r\n", 1)[0]
+    parts = status_line.split(b" ", 2)
+    if len(parts) < 2:
+        return 0
+    try:
+        return int(parts[1])
+    except ValueError:
+        return 0
 
-    Stops when a complete response has arrived (headers + body per Content-Length
-    or chunked framing), when the peer sends EOF, or when ``deadline`` passes
-    (``timed_out``). Returns ``(raw_bytes, timed_out, eof)``.
+
+def _read_response(sock: socket.socket, deadline: float) -> tuple[bytes, bool, bool]:
+    """Read one HTTP/1.1 response with a hard deadline, skipping 1xx interim responses.
+
+    Stops when a complete final (2xx-5xx) response has arrived (headers + body
+    per Content-Length or chunked framing), when the peer sends EOF, or when
+    ``deadline`` passes (``timed_out``). Returns ``(raw_bytes, timed_out, eof)``
+    where ``raw_bytes`` is the final response only (1xx bodies, if any, are
+    consumed but not returned).
+
+    1xx interim responses (e.g. ``100 Continue``) have no body per RFC 7230 §3.3
+    and are silently consumed so callers receive only the final response.  This
+    is required for the ``Expect: 100-continue`` desync probe (v0.6): a
+    vulnerable front-end sends ``100 Continue`` before the back-end hangs, and
+    the timing signal must come from the hang, not the interim response.
     """
     buf = bytearray()
     timed_out = False
     eof = False
-    header_end = -1
+    # response_start tracks where the *current* (potentially final) response
+    # begins within buf.  When we consume a 1xx interim response it advances.
+    response_start = 0
+    header_end = -1  # absolute offset of the \r\n\r\n separator within buf
     body_start = 0
     content_length: int | None = None
     chunked = False
     conn_close = False
 
     while True:
+        # --- process what is already in buf before blocking on recv ----------
+        if header_end < 0:
+            idx = buf.find(b"\r\n\r\n", response_start)
+            if idx >= 0:
+                head = bytes(buf[response_start:idx])
+                status = _status_code(head)
+                if 100 <= status <= 199:
+                    # 1xx responses carry no body (RFC 7230 §3.3).  Discard the
+                    # interim response and advance past it; the next iteration
+                    # will scan from the new response_start WITHOUT blocking on
+                    # recv again (the final response may already be in buf).
+                    response_start = idx + 4
+                    continue  # re-check buf from the new response_start
+                # Found the final response header.
+                header_end = idx
+                body_start = idx + 4
+                content_length, chunked, conn_close = _parse_framing(head)
+
+        if header_end >= 0:
+            body = buf[body_start:]
+            if content_length is not None:
+                if len(body) >= content_length:
+                    break
+            elif chunked:
+                if body.endswith(b"0\r\n\r\n") or b"\r\n0\r\n\r\n" in body:
+                    break
+            elif not conn_close:
+                # No body framing and keep-alive: the response ends at the head
+                # (e.g. 204/304 or an empty body). Reading further would block.
+                break
+            # else: Connection: close with no length -> read until EOF.
+
+        # --- need more data: block on recv with remaining deadline -----------
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             timed_out = True
@@ -146,28 +202,7 @@ def _read_response(sock: socket.socket, deadline: float) -> tuple[bytes, bool, b
             break
         buf += chunk
 
-        if header_end < 0:
-            idx = buf.find(b"\r\n\r\n")
-            if idx >= 0:
-                header_end = idx
-                body_start = idx + 4
-                content_length, chunked, conn_close = _parse_framing(bytes(buf[:idx]))
-
-        if header_end >= 0:
-            body = buf[body_start:]
-            if content_length is not None:
-                if len(body) >= content_length:
-                    break
-            elif chunked:
-                if body.endswith(b"0\r\n\r\n") or b"\r\n0\r\n\r\n" in body:
-                    break
-            elif not conn_close:
-                # No body framing and keep-alive: the response ends at the head
-                # (e.g. 204/304 or an empty body). Reading further would block.
-                break
-            # else: Connection: close with no length -> read until EOF.
-
-    return bytes(buf), timed_out, eof
+    return bytes(buf[response_start:]), timed_out, eof
 
 
 class RawConnection:

