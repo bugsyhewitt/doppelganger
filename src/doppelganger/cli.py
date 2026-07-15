@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from collections import Counter
 from typing import Sequence
 from urllib.parse import urlsplit
 
@@ -185,22 +187,42 @@ def _load_target_file(path: str) -> list[str]:
     return targets
 
 
-def _render(findings: list[Finding], output_format: str, suppressed: list[dict]) -> str:
-    """Render findings in the requested output format."""
+def _render(
+    findings: list[Finding],
+    output_format: str,
+    suppressed: list[dict],
+    *,
+    stats: dict | None = None,
+) -> str:
+    """Render findings in the requested output format.
+
+    Parameters
+    ----------
+    findings:
+        All confirmed/candidate findings from the scan.
+    output_format:
+        One of ``"json"``, ``"sarif"``, ``"h1md"``.
+    suppressed:
+        Pipelining-discriminated entries that were NOT reported as desyncs.
+    stats:
+        Optional scan-summary statistics dict (from :func:`run`).  Embedded as
+        ``"summary"`` in JSON, in ``run["properties"]`` in SARIF, and as a
+        ``## Scan Summary`` footer in h1md.
+    """
     if output_format == "sarif":
-        return json.dumps(to_sarif(findings), indent=2)
+        return json.dumps(to_sarif(findings, stats=stats), indent=2)
     if output_format == "h1md":
-        return to_h1md(findings)
+        return to_h1md(findings, stats=stats)
     # json (default): doppelganger's own finding documents.
-    return json.dumps(
-        {
-            "tool": "doppelganger",
-            "finding_count": len(findings),
-            "findings": [f.to_dict() for f in findings],
-            "suppressed_pipelining": suppressed,
-        },
-        indent=2,
-    )
+    doc: dict = {
+        "tool": "doppelganger",
+        "finding_count": len(findings),
+        "findings": [f.to_dict() for f in findings],
+        "suppressed_pipelining": suppressed,
+    }
+    if stats is not None:
+        doc["summary"] = stats
+    return json.dumps(doc, indent=2)
 
 
 def _scan_single(
@@ -353,23 +375,43 @@ def run(args: argparse.Namespace) -> int:
     # Track whether any target had an error so the exit code is meaningful when
     # the target list is a mix of good and bad entries.
     any_error = False
-    any_scan_ran = False
+    targets_scanned = 0
+    targets_errored = 0
+
+    scan_start = time.monotonic()
 
     for target in targets:
         findings, suppressed, code = _scan_single(target, scope, args)
         if code == 3:
             any_error = True
+            targets_errored += 1
             # Skip to the next target; error already printed to stderr.
             continue
-        any_scan_ran = True
+        targets_scanned += 1
         all_findings.extend(findings)
         all_suppressed.extend(suppressed)
 
-    if not any_scan_ran:
+    elapsed_ms = round((time.monotonic() - scan_start) * 1000, 1)
+
+    if targets_scanned == 0:
         # Every target hit a scope/connectivity error.
         return 3
 
-    print(_render(all_findings, args.output_format, all_suppressed))
+    # Build the scan-level summary that riders all output formats.
+    stats: dict = {
+        "targets_scanned": targets_scanned,
+        "targets_errored": targets_errored,
+        "finding_count": len(all_findings),
+        "suppressed_pipelining_count": len(all_suppressed),
+        "elapsed_ms": elapsed_ms,
+    }
+    if all_findings:
+        # Severity breakdown is only useful when there are findings.
+        stats["findings_by_severity"] = dict(
+            Counter(f.severity for f in all_findings)
+        )
+
+    print(_render(all_findings, args.output_format, all_suppressed, stats=stats))
 
     if all_findings:
         return 1
