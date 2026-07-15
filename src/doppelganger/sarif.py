@@ -117,7 +117,7 @@ def _rules_for(findings: list[Finding]) -> list[dict[str, Any]]:
         descriptor: dict[str, Any] = {
             "id": rule_id,
             "name": rule_id.replace("/", "_").replace(".", "_"),
-            "shortDescription": {"text": f"HTTP/1.1 desync: {f.vector}"},
+            "shortDescription": {"text": f"HTTP desync: {f.vector}"},
             "defaultConfiguration": {"level": _level_for(f.severity)},
             "properties": {"vector": f.vector},
         }
