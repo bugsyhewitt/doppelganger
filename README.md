@@ -91,6 +91,14 @@ URL                        target URL to probe (positional).
 --no-reuse-connection      force per-probe connection isolation (default)
 --format {json,sarif,h1md} output format (default: json)
 --timeout SECONDS          per-request timeout (default: 10.0)
+--retries N                retry the timing probe up to N additional times when
+                           it times out (default: 0). A genuine back-end hang is
+                           stable and times out on every retry; a transient
+                           network timeout typically clears on the first retry and
+                           is not reported as a timing signal. Recommended for
+                           targets with high-jitter network paths (--retries 1 or
+                           --retries 2). Applies to the HTTP/1.1 engine only;
+                           H2 and H2C engines ignore this flag.
 --version                  print "doppelganger 0.7.0"
 ```
 

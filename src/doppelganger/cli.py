@@ -144,6 +144,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="per-request timeout in seconds (default: 10.0)",
     )
     parser.add_argument(
+        "--retries",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "retry the timing probe up to N additional times when it times out "
+            "(default: 0). A genuine back-end hang is stable and times out on "
+            "every retry; a transient network timeout typically clears on the "
+            "first retry and is not reported as a timing signal. Applies to the "
+            "HTTP/1.1 engine (CL.TE / TE.CL / TE.TE / CL.0 / dup-CL / "
+            "TE.chunk / Expect.CL.TE); H2 and H2C engines ignore this flag."
+        ),
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"doppelganger {__version__}",
@@ -263,6 +277,7 @@ def _scan_single(
             timeout=args.timeout,
             safe=args.safe,
             reuse_connection=args.reuse_connection,
+            retries=args.retries,
         )
         techniques = (
             all_techniques()
