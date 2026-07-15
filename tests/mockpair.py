@@ -513,3 +513,114 @@ def candidate_pair() -> MockPair:
 def robust_pair() -> MockPair:
     """A non-vulnerable server: front and back agree (Content-Length)."""
     return MockPair(cl(0), cl(0), mode="server_desync")
+
+
+# --------------------------------------------------------------------------- #
+# Expect: 100-continue mock pair (v0.6)
+# --------------------------------------------------------------------------- #
+
+_100_CONTINUE = b"HTTP/1.1 100 Continue\r\n\r\n"
+
+
+def _has_expect_continue(header_lines: list[bytes]) -> bool:
+    """Return True when the request carries ``Expect: 100-continue``."""
+    for line in header_lines:
+        name, sep, value = line.partition(b":")
+        if sep and name.strip().lower() == b"expect":
+            if b"100-continue" in value.lower():
+                return True
+    return False
+
+
+class ExpectMockPair(MockPair):
+    """A CL.TE mock pair that sends ``100 Continue`` before the desync response.
+
+    Models a front-end that correctly handles ``Expect: 100-continue``:
+    when it sees the header it sends an interim ``100 Continue`` to the client
+    BEFORE reading the body and forwarding it to the back-end.
+
+    The back-end is TE-based (chunked); a CL.TE discrepancy leaves it waiting
+    for more chunk bytes after the front-end forwards only ``timing_cl`` bytes.
+
+    This is the mock that proves the v0.6 improvement: the raw sender's 1xx
+    skipping must see through the ``100 Continue`` to time the actual hang.
+    """
+
+    def __init__(self, mode: str = "server_desync", *, poison: bool = True) -> None:
+        super().__init__(cl(0), te(), mode=mode, hang_on_incomplete=True, poison=poison)
+
+    def _handle(self, conn: socket.socket) -> None:  # type: ignore[override]
+        conn.settimeout(_MOCK_IDLE_TIMEOUT)
+        buf = bytearray()
+        conn_pending: str | None = None
+        try:
+            while True:
+                # Wait for the complete headers (up to the blank line).
+                while b"\r\n\r\n" not in buf:
+                    chunk = self._recv(conn)
+                    if not chunk:
+                        return
+                    buf += chunk
+
+                idx = buf.find(b"\r\n\r\n")
+                header_lines = bytes(buf[:idx]).split(b"\r\n")
+
+                # If Expect: 100-continue is present, send the interim response
+                # BEFORE reading the body.  The client has already sent the body
+                # bytes (we don't wait for them), but the 100 appears first in
+                # the byte stream so rawsend._read_response must skip it.
+                if _has_expect_continue(header_lines[1:]):
+                    try:
+                        conn.sendall(_100_CONTINUE)
+                    except OSError:
+                        return
+
+                # Delegate remaining processing to the parent _handle logic.
+                # Re-inject header bytes so _read_front_message can consume them.
+                msg = self._read_front_message(conn, buf)
+                if msg is None:
+                    return
+                header_lines, front_body = msg
+
+                back_n = self.back(header_lines[1:], front_body)
+                if back_n is NEED_MORE:
+                    self.hang_count += 1
+                    if self.hang:
+                        self._await_close(conn)
+                        return
+                    back_n = 0
+
+                consumed = int(back_n)
+                leftover = front_body[consumed:]
+                own_path = _parse_path(b"\r\n".join(header_lines)) or "/"
+
+                pending = self._take_pending(conn_pending)
+                effective_path = pending if pending is not None else own_path
+                conn_pending = None
+
+                if leftover.strip():
+                    smuggled = _parse_path(leftover)
+                    if smuggled is not None:
+                        conn_pending = self._set_pending(smuggled, conn_pending)
+
+                try:
+                    conn.sendall(self._response(effective_path))
+                except OSError:
+                    return
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+def expect_clte_pair(mode: str = "server_desync") -> ExpectMockPair:
+    """front=CL/back=TE that sends ``100 Continue`` before the desync response.
+
+    Models the ``Expect.CL.TE`` technique: the front-end responds to
+    ``Expect: 100-continue`` with ``100 Continue`` before forwarding the body to
+    the back-end (TE), which is left with an incomplete chunk -> hang.
+
+    The rawsend 1xx-skipping fix is required to observe the subsequent timeout.
+    """
+    return ExpectMockPair(mode=mode)

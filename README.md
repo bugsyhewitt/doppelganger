@@ -72,7 +72,7 @@ when any finding is produced, `0` when clean, `3` on a scope/target error.
 
 ```
 URL                        target URL to probe (positional)
---technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,TE.chunk,H2.CL,H2.TE,all}
+--technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,TE.chunk,Expect.CL.TE,H2.CL,H2.TE,all}
                            which desync technique to probe (default: all).
                            `all` covers the HTTP/1.1 family; the HTTP/2-downgrade
                            techniques (H2.CL, H2.TE) are opt-in per technique
@@ -85,12 +85,12 @@ URL                        target URL to probe (positional)
 --no-reuse-connection      force per-probe connection isolation (default)
 --format {json,sarif,h1md} output format (default: json)
 --timeout SECONDS          per-request timeout (default: 10.0)
---version                  print "doppelganger 0.4.0"
+--version                  print "doppelganger 0.6.0"
 ```
 
 ### Techniques
 
-HTTP/1.1 desync family (v0.1 + v0.4 parser-discrepancy expansion):
+HTTP/1.1 desync family (v0.1 + v0.4 parser-discrepancy expansion + v0.6 Expect probe):
 
 | Technique | Discrepancy | Since |
 |-----------|-------------|-------|
@@ -100,6 +100,7 @@ HTTP/1.1 desync family (v0.1 + v0.4 parser-discrepancy expansion):
 | `CL.0`    | Content-Length honoured by front-end, treated as 0 by back-end | v0.1 |
 | `dup-CL`  | Two conflicting Content-Length headers | v0.1 |
 | `TE.chunk` | Both sides see chunked TE, but parse the chunk body differently — chunk extensions (`chunk-ext`) or bare-CR line endings (`bare-cr`) | v0.4 |
+| `Expect.CL.TE` | CL.TE discrepancy triggered via `Expect: 100-continue` — probes front-ends that send `100 Continue` before forwarding the body to a TE back-end | v0.6 |
 
 **TE.TE obfuscation dictionary (13 entries):** the standard 8 header-value mutations
 (space/tab/vertical-tab before colon; duplicate identity+chunked; chunked+identity
@@ -246,11 +247,27 @@ bare-CR end, trailing OWS, comma-prefix list). Adds the `TE.chunk` technique
 family -- two chunk-body-level variants (`chunk-ext`, `bare-cr`) that probe
 parser discrepancy at the chunk framing level rather than the TE header level.
 
+**v0.6 (landed): `Expect: 100-continue` desync probe (`Expect.CL.TE`).** Probes
+front-ends that implement `Expect: 100-continue` (sending a `100 Continue`
+interim response before forwarding the body to a TE-based back-end). Two
+concrete improvements ship together:
+
+1. **rawsend 1xx skipping**: `_read_response` now skips interim 1xx responses
+   (100 Continue, 102 Processing, etc.) and waits for the final 2xx–5xx
+   response. Without this fix, the client would stop reading at the `100
+   Continue` and never observe the back-end hang — the timing signal would be
+   lost.
+2. **`Expect.CL.TE` technique**: a CL.TE probe that includes `Expect:
+   100-continue`. On an Expect-aware front-end the probe exercises a distinct
+   server code path; a TE back-end that receives only the front-end's
+   Content-Length bytes (incomplete chunk) hangs, producing the timing signal
+   and confirming via the standard differential attack.
+
 **Still deferred:**
 
 - **Client-side / browser-powered desync (CSD)** -> needs a victim browser; out
   of scope for a headless CLI.
-- **0.CL, double-desync, Expect-based desync, early-response gadgets**
+- **0.CL, double-desync, early-response gadgets**
   ("HTTP/1.1 Must Die") -> next.
 - **Parser-discrepancy V-H/H-V engine** (HRS v3 flagship) -> research-grade
   sub-project.

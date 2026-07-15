@@ -62,9 +62,18 @@ CONFIDENCES: tuple[str, ...] = ("low", "medium", "high")
 # to "confirmed". Carried in ``Finding.evidence["confirmation"]``.
 CONFIRMATION_STATES: tuple[str, ...] = ("candidate", "confirmed")
 
-# The HTTP/1.1 desync techniques doppelganger v0.1 targets. These are the values
+# The HTTP/1.1 desync techniques doppelganger targets. These are the values
 # that legitimately populate ``Finding.vector``.
-TECHNIQUES: tuple[str, ...] = ("CL.TE", "TE.CL", "TE.TE", "CL.0", "dup-CL", "TE.chunk")
+# v0.6 adds "Expect.CL.TE": a CL.TE probe with Expect: 100-continue.
+TECHNIQUES: tuple[str, ...] = (
+    "CL.TE",
+    "TE.CL",
+    "TE.TE",
+    "CL.0",
+    "dup-CL",
+    "TE.chunk",
+    "Expect.CL.TE",
+)
 
 Severity = Literal["info", "low", "medium", "high", "critical"]
 Confidence = Literal["low", "medium", "high"]

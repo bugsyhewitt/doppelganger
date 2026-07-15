@@ -1,75 +1,36 @@
-# doppelganger v0.2 — HTTP/2 Desync Engine: Worker Output
+# doppelganger v0.6 — Expect.CL.TE probe + rawsend 1xx skipping
 
 ## Status: COMPLETE
 
-All v0.2 deliverables are shipped and all tests pass.
+## Improvement shipped
 
-## What was done
+**v0.6: `Expect: 100-continue` desync probe** — one focused addition landing two concrete improvements:
 
-### Assessment of branch state
+1. **rawsend 1xx skipping** (`src/doppelganger/rawsend.py`): `_read_response` previously stopped at the first complete HTTP response, including 1xx interim responses. When a front-end sends `HTTP/1.1 100 Continue` before the final response, the reader returned status 100 immediately (no timeout = no timing signal). The fixed implementation scans for and discards all 1xx responses from the accumulation buffer without blocking on `recv`, then continues waiting for the final 2xx–5xx response. This is a correctness fix and the prerequisite for any Expect-based probing.
 
-The `v0.2-http2` branch (latest commit `6ac652f`) had the full H2 engine already
-implemented:
+2. **`Expect.CL.TE` technique** (`src/doppelganger/techniques.py`, `src/doppelganger/findings.py`, `src/doppelganger/cli.py`): A CL.TE probe that includes `Expect: 100-continue` in the request headers. Some front-ends send `100 Continue` before forwarding the body to the back-end, exercising a distinct code path compared to a plain CL.TE POST. The timing probe and differential attack are structurally identical to CL.TE (Content-Length framing on the front, chunked on the back), but the Expect header may trigger different body-forwarding behaviour. With the 1xx fix in place, the engine correctly measures the back-end hang (the timing signal) even when the front-end's 100 Continue precedes it.
 
-- `src/doppelganger/h2send.py` — byte-exact HTTP/2 send layer: hand-rolled literal
-  HPACK encoder (RFC 7541 §6.2.2, no Huffman, no validation) + hand-built H2 frames
-  (RFC 7540 §4.1). Uses `hpack.Decoder` for response decoding only. Scope-enforced,
-  fail-closed with no scope.
-- `src/doppelganger/h2techniques.py` — H2.CL and H2.TE probe builders: timing probes
-  (lying CL >> body length; unterminated chunked body) and differential attack payloads
-  (CL:0 with smuggled body; chunked terminator + smuggled request).
-- `src/doppelganger/h2engine.py` — two-stage H2 engine mirroring the v0.1 engine:
-  timing candidate → differential confirmation + pipelining discrimination.
-- `tests/h2mock.py` — in-process HTTP/2-downgrade mock: hand-rolled H2 frame parser
-  (because `h2` rejects the prohibited headers on the server side too); models
-  vulnerable downgrade (copies prohibited headers verbatim), pipeline-only mode, and
-  the conformant (correct-downgrade) negative control.
-- `tests/test_h2send.py` — 14 frame-level unit tests.
-- `tests/test_h2engine.py` — 12 engine acceptance tests covering confirmation,
-  pipelining discrimination, candidate staging, safe mode, negative control, CLI wiring.
+## Files changed
 
-### Fixes applied this lap
-
-1. **Installed the worktree package** into the project venv so new modules were on
-   `sys.path` (the venv had the old v0.1 install).
-
-2. **Bumped version to 0.2.0** in:
-   - `pyproject.toml` (`version = "0.2.0"`)
-   - `src/doppelganger/__init__.py` (`__version__ = "0.2.0"`)
-   - `README.md` (`--version` output reference)
-   - `tests/test_wheel_ship_gate.py` (glob patterns and assertion strings still
-     referenced `0.1.0`; updated all occurrences — this was the only failing test).
+| File | Change |
+|------|--------|
+| `src/doppelganger/rawsend.py` | `_status_code()` helper + restructured `_read_response` loop to skip 1xx before blocking on recv |
+| `src/doppelganger/techniques.py` | `EXPECT_HEADER` constant; `extra_headers: tuple[bytes, ...]` field on `Technique`; `Expect.CL.TE` entry in `all_techniques()`; timing_probe/differential_attack plumbed through extra_headers |
+| `src/doppelganger/findings.py` | `"Expect.CL.TE"` added to `TECHNIQUES` tuple |
+| `tests/mockpair.py` | `_has_expect_continue`, `ExpectMockPair`, `expect_clte_pair` factory |
+| `tests/test_expect_probe.py` | 18 new unit tests (new file) |
+| `tests/test_findings.py` | Updated hardcoded TECHNIQUES check to set membership |
+| `src/doppelganger/__init__.py` | Version: `0.5.0` → `0.6.0` |
+| `pyproject.toml` | Version: `0.5.0` → `0.6.0` |
+| `README.md` | Techniques table updated; v0.6 roadmap entry; CLI help updated |
 
 ## Test results
 
-80 passed, 7 skipped, 0 failed.
+134 unit tests pass (`pytest -m "not ship_gate and not integration"`).
 
-Skipped tests are `ship_gate` venv-install variants (require sibling libs at specific
-paths; the build step itself passes) and the `integration` docker-compose lab test.
-
-Full output: `test-output.txt`.
-
-## v0.2 scope coverage
-
-| Attack | Timing probe | Differential attack | In-process mock | CLI wiring |
-|--------|-------------|--------------------|--------------------|------------|
-| H2.CL  | content-length >> DATA length → back-end hangs | CL:0 + smuggled body | `h2cl_pair` / `h2cl_candidate_pair` | `--technique H2.CL` |
-| H2.TE  | injected TE:chunked + unterminated chunk → back-end hangs | chunk terminator + smuggled request | `h2te_pair` | `--technique H2.TE` |
-| H2 downgrade (conformant) | — | negative control: no finding | `h2_robust_pair` | n/a |
-
-## Architecture
-
-The H2 engine is a **separate low-level stack** as required:
-- No reuse of the HTTP/1.1 `rawsend` sender.
-- Hand-rolled literal HPACK + raw frame construction (high-level `h2`/`httpx` libs
-  validate on send and refuse the prohibited framing these attacks require).
-- ALPN `h2` negotiation for TLS targets; prior-knowledge plaintext H2 for the
-  in-process test lab.
-- R5 enforced: response bytes are parsed to (status, body) signatures only — never
-  executed, shelled out, or passed to an LLM tool call.
-
-## v0.2 NOT in scope (deferred)
-
-H2C cleartext-upgrade, client-side desync, 0.CL, double-desync, Expect-based
-desync, parser-discrepancy V-H/H-V engine, weaponization. All documented in the
-README Roadmap section.
+New tests (18) in `tests/test_expect_probe.py` cover:
+- Technique registration (in all_techniques, safe_order, variant, discrepancy)
+- Probe payload shape (Expect header present in timing probe and differential attack)
+- rawsend 1xx skipping: timeout after 100+hang, correct 200 after 100+200, multiple 1xx skipped
+- Engine: confirmed desync on ExpectMockPair, candidate without poison, pipelining suppressed, detection on Expect-unaware servers, no false positive on robust pair
+- CLI: `--technique Expect.CL.TE` accepted
