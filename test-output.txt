@@ -1,4 +1,8 @@
-........................................................................ [ 47%]
-........................................................................ [ 94%]
-.........                                                                [100%]
-153 passed, 8 deselected in 33.37s
+$ python -m pytest -m "not ship_gate and not integration" -q
+...............................................................................
+...............................................................................
+.....................
+165 passed, 8 deselected in 38.44s
+
+New test module: tests/test_retries.py (12 tests, all pass)
+Full suite: 165 passed (153 before this change + 12 new retries tests), 8 deselected (ship_gate + integration markers).

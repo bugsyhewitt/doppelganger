@@ -118,6 +118,14 @@ class DesyncEngine:
         If ``True`` the *primary* probing reuses one connection (used to
         demonstrate/repro pipelining). The confirmation stage always runs BOTH an
         isolated and a reused experiment regardless, to discriminate.
+    retries:
+        Number of additional timing probes to send when the first probe times
+        out. A genuine back-end hang is stable across retries; a transient
+        network timeout (jitter, brief overload) typically clears on the first
+        retry. Setting ``retries=1`` or ``retries=2`` reduces false-positive
+        timing candidates without masking real desyncs: the timing signal is
+        only treated as stable if **all** probes (original + retries) time out.
+        Default ``0`` preserves the existing single-probe behaviour.
     """
 
     def __init__(
@@ -134,6 +142,7 @@ class DesyncEngine:
         reuse_connection: bool = False,
         rng=None,
         delta_threshold_ms: float = _DEFAULT_DELTA_MS,
+        retries: int = 0,
     ) -> None:
         self.target_url = target_url
         self.scope = scope
@@ -155,6 +164,7 @@ class DesyncEngine:
         self.timeout = timeout
         self.timing_timeout = timing_timeout if timing_timeout is not None else timeout
         self.delta_threshold_ms = delta_threshold_ms
+        self.retries = max(0, int(retries))
 
         self.raw = raw_sender or RawSender(
             scope, timeout=timeout, jitter=jitter, rng=rng
@@ -215,6 +225,24 @@ class DesyncEngine:
             rr = self._send_isolated(timing_probe, timeout=self.timing_timeout)
             timed_out = rr.timed_out
             timing_delta_ms = round(rr.elapsed_ms - baseline.elapsed_ms, 1)
+
+            # Retry stabilisation: if the first probe timed out, send up to
+            # ``self.retries`` additional probes.  A genuine back-end hang is
+            # stable -- all retries also time out.  A transient network timeout
+            # (jitter, brief overload) typically clears on the first retry, so
+            # we conservatively clear ``timed_out`` and do not treat the signal
+            # as stable.  The delta threshold path is not retried (it is already
+            # a softer signal and would require N+1 probes exceeding the threshold
+            # to be stabilised, which adds unacceptable scan latency).
+            for _attempt in range(self.retries):
+                if not timed_out:
+                    break
+                rr_retry = self._send_isolated(timing_probe, timeout=self.timing_timeout)
+                if not rr_retry.timed_out:
+                    # At least one retry came back clean: the original timeout
+                    # was not a stable hang -- treat the timing signal as absent.
+                    timed_out = False
+                    break
         candidate = timed_out or (
             timing_delta_ms is not None and timing_delta_ms >= self.delta_threshold_ms
         )
