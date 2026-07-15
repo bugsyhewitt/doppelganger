@@ -99,7 +99,7 @@ URL                        target URL to probe (positional).
                            targets with high-jitter network paths (--retries 1 or
                            --retries 2). Applies to the HTTP/1.1 engine only;
                            H2 and H2C engines ignore this flag.
---version                  print "doppelganger 0.9.0"
+--version                  print "doppelganger 1.0.0"
 ```
 
 ### Multi-target scanning
@@ -366,6 +366,14 @@ were probed, elapsed wall-clock time, and the severity breakdown of findings:
 - **`--format h1md`**: a `## Scan Summary` table is appended to the document
   with targets scanned, findings, suppressed pipelining count, and elapsed time
   — useful when submitting to a bug-bounty program with multiple in-scope assets.
+
+**v1.0.0 (this release): stable release.** Consolidates v0.1–v0.9 into the first
+stable release. All nine technique families (CL.TE, TE.CL, TE.TE, CL.0, dup-CL,
+TE.chunk, Expect.CL.TE, H2.CL, H2.TE, H2.PseudoHdrInject) plus H2C detection are
+proven hermetically by 201 unit tests; the `ship_gate` suite builds a wheel and
+drives the installed CLI against the in-process mock pair end-to-end. No new
+techniques in this release; the focus is correctness, release hygiene, and the
+1.0.0 stability contract.
 
 **Still deferred:**
 
