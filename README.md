@@ -1,5 +1,9 @@
 # doppelganger
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/bugsyhewitt/bugsyhewitt.github.io/main/public/cards/doppelganger.jpg" alt="doppelganger" width="680">
+</p>
+
 Headless HTTP/1.1 **request-smuggling / desync** detection and differential
 confirmation for authorized bug-bounty and penetration-testing engagements.
 
