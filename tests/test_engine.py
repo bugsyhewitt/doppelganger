@@ -205,3 +205,67 @@ def test_out_of_scope_target_raises_before_probing(scope):
     engine = DesyncEngine("http://not-in-scope.example.net/", scope=scope, timeout=TIMEOUT)
     with pytest.raises(OutOfScopeError):
         engine.run([_first("CL.TE")])
+
+
+# --------------------------------------------------------------------------- #
+# CL.0 GET+CL:0 sub-variant
+# --------------------------------------------------------------------------- #
+
+
+def _get_cl0_technique():
+    """The GET+CL:0 sub-variant of CL.0 (variant='get-cl0')."""
+    return next(t for t in technique_by_name("CL.0") if t.variant == "get-cl0")
+
+
+def test_cl0_get_variant_confirmed_on_transparent_proxy_desync(scope):
+    """GET+CL:0 variant differentially CONFIRMS a transparent-proxy desync.
+
+    The get_cl0_pair uses a passthrough front-end (transparent TCP forwarder)
+    and a Content-Length-reading back-end.  The GET probe sends CL:0 but
+    appends the smuggled request after the headers; the transparent front
+    forwards all bytes; the back-end reads CL:0 (0 body bytes) and the extra
+    bytes become the next-request prefix -- confirmed server-side desync.
+    """
+    with mockpair.get_cl0_pair("server_desync") as srv:
+        engine = _engine(srv, scope)
+        findings = engine.run([_get_cl0_technique()])
+    assert len(findings) == 1, "expected one CL.0 get-cl0 finding"
+    f = findings[0]
+    assert f.vector == "CL.0"
+    assert f.variant == "get-cl0"
+    assert f.evidence["confirmation"] == "confirmed"
+    assert f.severity == "high"
+    assert f.confidence == "high"
+    assert f.evidence["connection_reuse"] is False
+    assert f.cwe_id == CWE_REQUEST_SMUGGLING
+    assert not engine.suppressed
+
+
+def test_cl0_get_variant_pipelining_is_discriminated(scope):
+    """GET+CL:0 pipeline-only effect is suppressed -- not a server-side desync."""
+    with mockpair.get_cl0_pair("pipeline_only") as srv:
+        engine = _engine(srv, scope)
+        findings = engine.run([_get_cl0_technique()])
+    assert findings == [], "pipeline-only CL.0 get-cl0 must not be reported as a desync"
+    assert len(engine.suppressed) == 1
+    entry = engine.suppressed[0]
+    assert entry["technique"] == "CL.0"
+    assert entry["connection_reuse"] is True
+    assert "pipelining" in entry["reason"]
+
+
+def test_cl0_get_variant_in_all_techniques():
+    """GET+CL:0 is present in the all-techniques list."""
+    from doppelganger.techniques import all_techniques
+
+    cl0_variants = [t.variant for t in all_techniques() if t.name == "CL.0"]
+    assert "get-cl0" in cl0_variants, "get-cl0 variant missing from all_techniques()"
+    assert None in cl0_variants, "classic CL.0 (variant=None) must still be present"
+
+
+def test_cl0_classic_and_get_variants_have_same_safe_order():
+    """Both CL.0 sub-variants share safe_order=1 (neither is deferred to TE.CL slot)."""
+    from doppelganger.techniques import all_techniques
+
+    orders = {t.variant: t.safe_order for t in all_techniques() if t.name == "CL.0"}
+    assert orders[None] == orders["get-cl0"] == 1

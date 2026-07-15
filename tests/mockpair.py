@@ -358,9 +358,37 @@ def tecl_pair(mode: str = "server_desync") -> MockPair:
     return MockPair(te(), cl(0), mode=mode)
 
 
+def passthrough() -> Strategy:
+    """Transparent strategy: forwards ALL bytes in the body region.
+
+    Models a TCP-level transparent proxy that does not apply HTTP framing to
+    decide what to forward -- every byte after the request headers is passed
+    to the back-end verbatim.  Combined with a back-end that reads
+    Content-Length correctly (e.g. CL:0 on a GET request), this synthesises
+    the GET+CL:0 server-side desync: the back-end reads 0 body bytes and the
+    extra bytes (the smuggled request) become the next-request prefix.
+    """
+
+    def strategy(header_lines: list[bytes], body: bytes) -> "int | object":
+        return len(body)
+
+    return strategy
+
+
 def cl0_pair(mode: str = "server_desync") -> MockPair:
     """front=Content-Length, back ignores the body (CL.0)."""
     return MockPair(cl(0), cl0(), mode=mode)
+
+
+def get_cl0_pair(mode: str = "server_desync") -> MockPair:
+    """front=passthrough (transparent TCP), back=Content-Length (GET+CL:0 desync).
+
+    The front-end forwards every byte received after the request headers.
+    The back-end reads Content-Length from the headers (CL:0 for the GET
+    probe), consuming 0 body bytes and leaving the smuggled request as
+    leftover -- the GET+CL:0 server-side desync.
+    """
+    return MockPair(passthrough(), cl(0), mode=mode)
 
 
 def dupcl_pair(mode: str = "server_desync") -> MockPair:
