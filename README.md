@@ -85,7 +85,7 @@ URL                        target URL to probe (positional)
 --no-reuse-connection      force per-probe connection isolation (default)
 --format {json,sarif,h1md} output format (default: json)
 --timeout SECONDS          per-request timeout (default: 10.0)
---version                  print "doppelganger 0.1.0"
+--version                  print "doppelganger 0.2.0"
 ```
 
 ### Techniques

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "doppelganger"
-version = "0.1.0"
+version = "0.2.0"
 description = "Headless HTTP/1.1 request-smuggling / desync detection and differential confirmation for authorized bug-bounty and pentest engagements."
 readme = "README.md"
 requires-python = ">=3.13"
