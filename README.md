@@ -71,7 +71,13 @@ when any finding is produced, `0` when clean, `3` on a scope/target error.
 ### Options
 
 ```
-URL                        target URL to probe (positional)
+URL                        target URL to probe (positional).
+                           Mutually exclusive with --target-file.
+--target-file FILE         file containing target URLs to probe, one per line.
+                           Lines starting with '#' and blank lines are ignored.
+                           All targets are scanned in sequence; findings are
+                           aggregated in a single output document. Mutually
+                           exclusive with the positional URL argument.
 --technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,TE.chunk,Expect.CL.TE,H2.CL,H2.TE,all}
                            which desync technique to probe (default: all).
                            `all` covers the HTTP/1.1 family; the HTTP/2-downgrade
@@ -85,8 +91,35 @@ URL                        target URL to probe (positional)
 --no-reuse-connection      force per-probe connection isolation (default)
 --format {json,sarif,h1md} output format (default: json)
 --timeout SECONDS          per-request timeout (default: 10.0)
---version                  print "doppelganger 0.6.0"
+--version                  print "doppelganger 0.7.0"
 ```
+
+### Multi-target scanning
+
+For bug-bounty programs with multiple in-scope assets, pass a newline-delimited
+URL file via `--target-file`:
+
+```bash
+doppelganger --scope-file scope.txt --target-file targets.txt --technique CL.TE
+```
+
+The target file format is the same as the scope file: one URL per line, lines
+beginning with `#` are comments, blank lines are skipped.
+
+```
+# Production endpoints
+https://api.example.com/
+https://gateway.example.com/
+
+# Staging
+https://staging.example.com/
+```
+
+All targets are scanned sequentially with the selected technique. Findings and
+suppressed pipelining entries from all targets are merged into a single output
+document. Out-of-scope targets are reported to stderr and skipped; scanning
+continues with the remaining targets. Exit code is `1` if **any** target
+produced a finding, `0` if all were clean.
 
 ### Techniques
 
@@ -246,6 +279,14 @@ obfuscation dictionary from 8 to 13 header-level entries (mixed-case, null-byte,
 bare-CR end, trailing OWS, comma-prefix list). Adds the `TE.chunk` technique
 family -- two chunk-body-level variants (`chunk-ext`, `bare-cr`) that probe
 parser discrepancy at the chunk framing level rather than the TE header level.
+
+**v0.7 (landed): Multi-target scanning (`--target-file`).** Adds a
+`--target-file FILE` argument that reads a newline-delimited list of target URLs
+(comment lines starting with `#` ignored). All targets are scanned in sequence
+with the selected technique; findings and suppressed-pipelining entries are
+aggregated into a single output document. Out-of-scope targets are reported to
+stderr and skipped; scanning continues. Exit code semantics are unchanged: `1` if
+any finding across all targets, `0` if all clean, `3` on scope/file error.
 
 **v0.6 (landed): `Expect: 100-continue` desync probe (`Expect.CL.TE`).** Probes
 front-ends that implement `Expect: 100-continue` (sending a `100 Continue`
