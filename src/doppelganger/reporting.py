@@ -42,8 +42,15 @@ _CANDIDATE_NOTE = (
 def _description(f: Finding) -> str:
     confirmation = f.evidence.get("confirmation", "candidate")
     variant = f" (variant: {f.variant})" if f.variant else ""
+    http_version = f.evidence.get("http_version", "")
+    if http_version == "h2-downgrade":
+        attack_label = "HTTP/2-downgrade request-smuggling desync"
+    elif http_version == "h1-cleartext-upgrade-to-h2c":
+        attack_label = "H2C cleartext-upgrade"
+    else:
+        attack_label = "HTTP/1.1 request-smuggling desync"
     parts = [
-        f"{f.vector} HTTP/1.1 request-smuggling desync{variant} against "
+        f"{f.vector} {attack_label}{variant} against "
         f"`{f.target}` -- status: **{confirmation}**."
     ]
     delta = f.evidence.get("timing_delta_ms")

@@ -173,10 +173,7 @@ def _probe(
     start = time.monotonic()
     deadline = start + timeout
 
-    try:
-        sock = socket.create_connection((host, port), timeout=timeout)
-    except OSError:
-        raise
+    sock = socket.create_connection((host, port), timeout=timeout)
 
     try:
         sock.sendall(_upgrade_request(host_header, path))

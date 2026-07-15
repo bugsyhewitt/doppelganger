@@ -170,11 +170,11 @@ def _read_response(sock: socket.socket, deadline: float) -> tuple[bytes, bool, b
                 content_length, chunked, conn_close = _parse_framing(head)
 
         if header_end >= 0:
-            body = buf[body_start:]
             if content_length is not None:
-                if len(body) >= content_length:
+                if len(buf) - body_start >= content_length:
                     break
             elif chunked:
+                body = buf[body_start:]
                 if body.endswith(b"0\r\n\r\n") or b"\r\n0\r\n\r\n" in body:
                     break
             elif not conn_close:

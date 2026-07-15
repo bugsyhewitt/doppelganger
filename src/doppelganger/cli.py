@@ -178,13 +178,11 @@ def _load_target_file(path: str) -> list[str]:
         OSError: if the file cannot be opened or read.
     """
     with open(path) as fh:
-        lines = fh.readlines()
-    targets: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            targets.append(stripped)
-    return targets
+        return [
+            stripped
+            for line in fh
+            if (stripped := line.strip()) and not stripped.startswith("#")
+        ]
 
 
 def _render(
