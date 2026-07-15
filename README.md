@@ -99,7 +99,7 @@ URL                        target URL to probe (positional).
                            targets with high-jitter network paths (--retries 1 or
                            --retries 2). Applies to the HTTP/1.1 engine only;
                            H2 and H2C engines ignore this flag.
---version                  print "doppelganger 0.8.0"
+--version                  print "doppelganger 0.9.0"
 ```
 
 ### Multi-target scanning
@@ -205,31 +205,52 @@ A confirmed CL.TE finding, as it will render (`--format json`):
 
 ```json
 {
-  "id": "dg-clte-0c249eb8",
   "tool": "doppelganger",
-  "title": "CL.TE HTTP/1.1 request-smuggling desync confirmed",
-  "severity": "high",
-  "confidence": "high",
-  "target": "https://target.example.com/",
-  "vector": "CL.TE",
-  "variant": null,
-  "cwe_id": 444,
-  "evidence": {
-    "discrepancy": "CL.TE",
-    "confirmation": "confirmed",
-    "connection_reuse": false,
-    "timing_delta_ms": 400.4,
-    "request": "POST / HTTP/1.1\r\n...",
-    "reproduction": "POST / HTTP/1.1\r\n..."
-  },
-  "references": ["https://portswigger.net/research/http-desync-attacks-request-smuggling-reborn"],
-  "created_at": "2026-07-02T00:00:00+00:00"
+  "finding_count": 1,
+  "findings": [
+    {
+      "id": "dg-clte-0c249eb8",
+      "tool": "doppelganger",
+      "title": "CL.TE HTTP/1.1 request-smuggling desync confirmed",
+      "severity": "high",
+      "confidence": "high",
+      "target": "https://target.example.com/",
+      "vector": "CL.TE",
+      "variant": null,
+      "cwe_id": 444,
+      "evidence": {
+        "discrepancy": "CL.TE",
+        "confirmation": "confirmed",
+        "connection_reuse": false,
+        "timing_delta_ms": 400.4,
+        "request": "POST / HTTP/1.1\r\n...",
+        "reproduction": "POST / HTTP/1.1\r\n..."
+      },
+      "references": ["https://portswigger.net/research/http-desync-attacks-request-smuggling-reborn"],
+      "created_at": "2026-07-02T00:00:00+00:00"
+    }
+  ],
+  "suppressed_pipelining": [],
+  "summary": {
+    "targets_scanned": 1,
+    "targets_errored": 0,
+    "finding_count": 1,
+    "suppressed_pipelining_count": 0,
+    "elapsed_ms": 520.3,
+    "findings_by_severity": {"high": 1}
+  }
 }
 ```
 
 A timing-only **candidate** looks the same with `"confirmation": "candidate"`,
 `severity: "medium"`, `confidence: "low"`. Suppressed pipelining artifacts are
 reported separately under `suppressed_pipelining`, never as findings.
+
+The `summary` block is always emitted in `--format json`. It gives a glance
+at targets probed, elapsed wall-time, finding counts, and -- when findings exist
+-- a severity breakdown. The SARIF output embeds the same statistics in
+`runs[0]["properties"]["doppelganger/scanSummary"]` for GitHub Code Scanning
+consumers; `--format h1md` appends a `## Scan Summary` table to the report.
 
 The finding also serialises to SARIF 2.1.0 (`--format sarif`, for GitHub Code
 Scanning / IDEs) and HackerOne markdown (`--format h1md`).
@@ -330,6 +351,21 @@ carries the bytes to the wire verbatim. Exploits a distinct vulnerable code path
 H2.TE (which targets downgraders that copy prohibited regular headers through). Both
 variants use the same two-stage engine (timing hang → differential confirmation) and
 pipelining discrimination as the existing H2 techniques.
+
+**v0.9 (landed): Scan summary statistics.** Every output format now includes a
+structured scan-level summary so operators can see at a glance how many targets
+were probed, elapsed wall-clock time, and the severity breakdown of findings:
+
+- **`--format json`**: a `"summary"` top-level key is always emitted. Fields:
+  `targets_scanned`, `targets_errored`, `finding_count`,
+  `suppressed_pipelining_count`, `elapsed_ms`, and (when findings exist)
+  `findings_by_severity` (a dict of severity label → count).
+- **`--format sarif`**: summary embedded in `runs[0]["properties"]["doppelganger/scanSummary"]`
+  — surfaced to GitHub Code Scanning and CI SAST dashboards as run-level
+  metadata.
+- **`--format h1md`**: a `## Scan Summary` table is appended to the document
+  with targets scanned, findings, suppressed pipelining count, and elapsed time
+  — useful when submitting to a bug-bounty program with multiple in-scope assets.
 
 **Still deferred:**
 

@@ -129,23 +129,39 @@ def _rules_for(findings: list[Finding]) -> list[dict[str, Any]]:
     return rules
 
 
-def to_sarif(findings: Iterable[Finding]) -> dict[str, Any]:
-    """Render doppelganger findings to a SARIF 2.1.0 document (as a ``dict``)."""
+def to_sarif(
+    findings: Iterable[Finding],
+    *,
+    stats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Render doppelganger findings to a SARIF 2.1.0 document (as a ``dict``).
+
+    Parameters
+    ----------
+    findings:
+        The findings to serialise.
+    stats:
+        Optional scan-summary statistics dict (from :func:`doppelganger.cli.run`).
+        When provided it is embedded in ``runs[0]["properties"]`` under the key
+        ``"doppelganger/scanSummary"``, making it machine-readable to GitHub Code
+        Scanning consumers and CI dashboards that surface run-level metadata.
+    """
     findings = list(findings)
+    run: dict[str, Any] = {
+        "tool": {
+            "driver": {
+                "name": "doppelganger",
+                "version": __version__,
+                "informationUri": INFORMATION_URI,
+                "rules": _rules_for(findings),
+            }
+        },
+        "results": [_result_for(f) for f in findings],
+    }
+    if stats is not None:
+        run["properties"] = {"doppelganger/scanSummary": stats}
     return {
         "$schema": SARIF_SCHEMA,
         "version": SARIF_VERSION,
-        "runs": [
-            {
-                "tool": {
-                    "driver": {
-                        "name": "doppelganger",
-                        "version": __version__,
-                        "informationUri": INFORMATION_URI,
-                        "rules": _rules_for(findings),
-                    }
-                },
-                "results": [_result_for(f) for f in findings],
-            }
-        ],
+        "runs": [run],
     }

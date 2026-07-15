@@ -102,7 +102,49 @@ def _to_h1_finding(f: Finding) -> H1Finding:
     )
 
 
-def to_h1md(findings: Iterable[Finding]) -> str:
-    """Render doppelganger findings to HackerOne-flavored markdown."""
+def _summary_section(stats: dict) -> str:
+    """Build a ``## Scan Summary`` markdown footer from scan-level statistics."""
+    lines: list[str] = ["", "## Scan Summary", ""]
+    lines.append(f"| Metric | Value |")
+    lines.append(f"|--------|-------|")
+    lines.append(f"| Targets scanned | {stats['targets_scanned']} |")
+    if stats.get("targets_errored"):
+        lines.append(f"| Targets errored | {stats['targets_errored']} |")
+    lines.append(f"| Findings | {stats['finding_count']} |")
+    lines.append(f"| Suppressed (pipelining) | {stats['suppressed_pipelining_count']} |")
+    lines.append(f"| Elapsed | {stats['elapsed_ms']} ms |")
+    sev = stats.get("findings_by_severity")
+    if sev:
+        # Sort highest severity first (critical, high, medium, low, info).
+        _ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        sev_str = ", ".join(
+            f"{k}: {v}"
+            for k, v in sorted(sev.items(), key=lambda kv: _ORDER.get(kv[0], 99))
+        )
+        lines.append(f"| Findings by severity | {sev_str} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def to_h1md(
+    findings: Iterable[Finding],
+    *,
+    stats: dict | None = None,
+) -> str:
+    """Render doppelganger findings to HackerOne-flavored markdown.
+
+    Parameters
+    ----------
+    findings:
+        The findings to render.
+    stats:
+        Optional scan-summary statistics dict (from :func:`doppelganger.cli.run`).
+        When provided a ``## Scan Summary`` table is appended to the document so
+        the reader can see at a glance how many targets were probed, elapsed time,
+        and the severity breakdown of findings.
+    """
     mapped = [_to_h1_finding(f) for f in findings]
-    return render_h1md(mapped, title="doppelganger HTTP desync findings")
+    body = render_h1md(mapped, title="doppelganger HTTP desync findings")
+    if stats is not None:
+        body = body.rstrip() + "\n" + _summary_section(stats)
+    return body
