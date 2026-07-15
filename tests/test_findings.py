@@ -39,7 +39,7 @@ def test_confirmation_states():
 
 
 def test_techniques_are_the_http1_desync_family():
-    assert TECHNIQUES == ("CL.TE", "TE.CL", "TE.TE", "CL.0", "dup-CL")
+    assert TECHNIQUES == ("CL.TE", "TE.CL", "TE.TE", "CL.0", "dup-CL", "TE.chunk")
 
 
 # --------------------------------------------------------------------------- #

@@ -64,7 +64,7 @@ CONFIRMATION_STATES: tuple[str, ...] = ("candidate", "confirmed")
 
 # The HTTP/1.1 desync techniques doppelganger v0.1 targets. These are the values
 # that legitimately populate ``Finding.vector``.
-TECHNIQUES: tuple[str, ...] = ("CL.TE", "TE.CL", "TE.TE", "CL.0", "dup-CL")
+TECHNIQUES: tuple[str, ...] = ("CL.TE", "TE.CL", "TE.TE", "CL.0", "dup-CL", "TE.chunk")
 
 Severity = Literal["info", "low", "medium", "high", "critical"]
 Confidence = Literal["low", "medium", "high"]

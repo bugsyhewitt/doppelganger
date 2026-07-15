@@ -37,8 +37,8 @@ def test_wheel_builds_cleanly(tmp_path):
         [sys.executable, "-m", "build", "--wheel", "--sdist", "--outdir", str(out)],
         cwd=REPO_ROOT,
     )
-    wheels = list(out.glob("doppelganger-0.3.0-*.whl"))
-    sdists = list(out.glob("doppelganger-0.3.0.tar.gz"))
+    wheels = list(out.glob("doppelganger-0.4.0-*.whl"))
+    sdists = list(out.glob("doppelganger-0.4.0.tar.gz"))
     assert wheels, f"wheel not built; got: {list(out.iterdir())}"
     assert sdists, f"sdist not built; got: {list(out.iterdir())}"
     test_wheel_builds_cleanly._wheel = wheels[0]
@@ -71,7 +71,7 @@ def test_wheel_installs_into_fresh_venv(tmp_path):
 
     cli = venv_dir / "bin" / "doppelganger"
     version_out = _run([str(cli), "--version"]).stdout.strip()
-    assert version_out == "doppelganger 0.3.0", (
+    assert version_out == "doppelganger 0.4.0", (
         f"unexpected --version output: {version_out!r}"
     )
 
@@ -80,14 +80,14 @@ def test_wheel_installs_into_fresh_venv(tmp_path):
 
 @pytest.mark.ship_gate
 def test_wheel_version_importable_in_fresh_venv(tmp_path):
-    """`import doppelganger; doppelganger.__version__` == '0.3.0' in the venv."""
+    """`import doppelganger; doppelganger.__version__` == '0.4.0' in the venv."""
     venv_dir = getattr(test_wheel_installs_into_fresh_venv, "_venv_dir", None)
     if venv_dir is None:
         pytest.skip("preceding install test did not build a venv")
 
     py = venv_dir / "bin" / "python"
     _run(
-        [str(py), "-c", "import doppelganger; assert doppelganger.__version__ == '0.3.0'"],
+        [str(py), "-c", "import doppelganger; assert doppelganger.__version__ == '0.4.0'"],
     )
 
 

