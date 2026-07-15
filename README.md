@@ -78,11 +78,11 @@ URL                        target URL to probe (positional).
                            All targets are scanned in sequence; findings are
                            aggregated in a single output document. Mutually
                            exclusive with the positional URL argument.
---technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,TE.chunk,Expect.CL.TE,H2.CL,H2.TE,all}
+--technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,TE.chunk,Expect.CL.TE,H2.CL,H2.TE,H2.PseudoHdrInject,all}
                            which desync technique to probe (default: all).
                            `all` covers the HTTP/1.1 family; the HTTP/2-downgrade
-                           techniques (H2.CL, H2.TE) are opt-in per technique
-                           (they need an HTTP/2 front-end)
+                           techniques (H2.CL, H2.TE, H2.PseudoHdrInject) are
+                           opt-in per technique (they need an HTTP/2 front-end)
 --scope-file FILE          authorization scope file (host / CIDR per line)
 --safe                     safe/production mode: per-probe connection isolation,
                            CL.TE before TE.CL, bounded+randomised timeouts
@@ -99,7 +99,7 @@ URL                        target URL to probe (positional).
                            targets with high-jitter network paths (--retries 1 or
                            --retries 2). Applies to the HTTP/1.1 engine only;
                            H2 and H2C engines ignore this flag.
---version                  print "doppelganger 0.7.0"
+--version                  print "doppelganger 0.8.0"
 ```
 
 ### Multi-target scanning
@@ -161,13 +161,14 @@ via Content-Length and the back-end attempts to parse those bytes as chunks:
   parsers cannot find the chunk boundary and hang (timing candidate); lenient
   parsers consume the chunk and leave the smuggled prefix.
 
-HTTP/2-downgrade family (v0.2) -- an HTTP/2 front-end that forwards to an
-HTTP/1.1 back-end, desynced via a header the H2 layer never honours:
+HTTP/2-downgrade family -- an HTTP/2 front-end that forwards to an HTTP/1.1
+back-end, desynced via a length-framing disagreement the H2 layer never honours:
 
 | Technique | Discrepancy | Since |
 |-----------|-------------|-------|
 | `H2.CL`   | H2 request carries a `content-length` that disagrees with the DATA length; a vulnerable downgrade copies it into the HTTP/1.1 request | v0.2 |
-| `H2.TE`   | H2 request carries an (RFC-prohibited) `transfer-encoding: chunked`; a vulnerable downgrade copies it through | v0.2 |
+| `H2.TE`   | H2 request carries an (RFC-prohibited) `transfer-encoding: chunked` regular header; a vulnerable downgrade copies it through | v0.2 |
+| `H2.PseudoHdrInject` | CR+LF injected into a header *value* (`:authority` pseudo-header, or a regular header value); a vulnerable downgrade that copies decoded values verbatim produces an extra `Transfer-Encoding: chunked` line in the H1 view — two variants: `authority-crlf-te` and `header-val-crlf-te` | v0.8 |
 
 The H2 probes use a hand-rolled byte-exact HTTP/2 send layer, because the
 high-level H2 stacks *validate on send* and refuse the prohibited framing these
@@ -189,7 +190,7 @@ engine remain out of scope -- see Roadmap.
 | `doppelganger.client`     | `scan-primitives`-backed, scope-enforcing well-formed baseline client. |
 | `doppelganger.engine`     | Two-stage HTTP/1.1 detector: timing detection -> differential confirmation + pipelining discrimination. |
 | `doppelganger.h2send`     | Byte-exact HTTP/2 send layer (v0.2): literal HPACK + hand-built frames that carry the RFC-prohibited framing H2.CL/H2.TE need; ALPN `h2`; scope-enforced. |
-| `doppelganger.h2techniques` | H2.CL / H2.TE downgrade probe builders (v0.2). |
+| `doppelganger.h2techniques` | H2.CL / H2.TE downgrade probe builders (v0.2); H2.PseudoHdrInject CRLF-injection variants (v0.8). |
 | `doppelganger.h2engine`   | Two-stage HTTP/2-downgrade detector (v0.2), mirroring `engine` over the H2 transport. |
 | `doppelganger.cli`        | argparse CLI. |
 
@@ -311,6 +312,24 @@ concrete improvements ship together:
    server code path; a TE back-end that receives only the front-end's
    Content-Length bytes (incomplete chunk) hangs, producing the timing signal
    and confirming via the standard differential attack.
+
+**v0.8 (landed): H2 pseudo-header / header-value CRLF injection (`H2.PseudoHdrInject`).** A
+third H2-downgrade technique that injects `\r\nTransfer-Encoding: chunked` into a
+header *value* rather than as a prohibited regular header (H2.TE). Two variants cover
+distinct vulnerable code paths in H2→H1 downgraders:
+
+- **`authority-crlf-te`**: CRLF injected into the `:authority` pseudo-header value; a
+  vulnerable downgrader that copies the decoded authority directly into `Host:` without
+  stripping CR+LF produces an extra `Transfer-Encoding: chunked` line.
+- **`header-val-crlf-te`**: CRLF injected into a regular header value (`X-Padding`); a
+  downgrader that does not sanitise CRLF in non-pseudo header values injects the TE
+  header into the H1 view.
+
+RFC 9113 §8.2.1 prohibits CR+LF in H2 header values; the literal-HPACK send layer
+carries the bytes to the wire verbatim. Exploits a distinct vulnerable code path from
+H2.TE (which targets downgraders that copy prohibited regular headers through). Both
+variants use the same two-stage engine (timing hang → differential confirmation) and
+pipelining discrimination as the existing H2 techniques.
 
 **Still deferred:**
 

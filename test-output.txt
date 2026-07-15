@@ -1,8 +1,8 @@
 $ python -m pytest -m "not ship_gate and not integration" -q
-...............................................................................
-...............................................................................
-.....................
-165 passed, 8 deselected in 38.44s
+........................................................................ [ 38%]
+........................................................................ [ 77%]
+.........................................                                [100%]
+185 passed, 8 deselected in 43.21s
 
-New test module: tests/test_retries.py (12 tests, all pass)
-Full suite: 165 passed (153 before this change + 12 new retries tests), 8 deselected (ship_gate + integration markers).
+New test module: tests/test_h2_pseudohdr.py (20 tests, all pass)
+Full suite: 185 passed (165 before this change + 20 new H2.PseudoHdrInject tests), 8 deselected (ship_gate + integration markers).
