@@ -344,6 +344,19 @@ def h2cl_candidate_pair() -> H2DowngradeMockPair:
     return H2DowngradeMockPair(cl(0), mode="server_desync", poison=False)
 
 
+def h2pseudo_inject_pair(mode: str = "server_desync") -> H2DowngradeMockPair:
+    """H2.PseudoHdrInject: back-end honours TE injected via CRLF in header values.
+
+    Both ``H2.PseudoHdrInject`` variants (``authority-crlf-te`` and
+    ``header-val-crlf-te``) produce a ``Transfer-Encoding: chunked`` line that
+    appears in the downgraded H1 header block when the mock's ``_downgrade()``
+    copies decoded values verbatim.  The ``te()`` back-end strategy finds the
+    injected TE and switches to chunked parsing, creating the same desync shape
+    as H2.TE (hang on incomplete chunk, smuggled prefix from the terminator).
+    """
+    return H2DowngradeMockPair(te(), mode=mode)
+
+
 def h2_robust_pair() -> H2DowngradeMockPair:
     """A non-vulnerable front-end: strips prohibited headers on downgrade.
 
