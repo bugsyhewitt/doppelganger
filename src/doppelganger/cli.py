@@ -30,6 +30,7 @@ from scan_primitives import OutOfScopeError, load_scope
 from doppelganger import __version__
 from doppelganger.engine import DesyncEngine
 from doppelganger.findings import TECHNIQUES, Finding
+from doppelganger.h2c import H2C_TECHNIQUES
 from doppelganger.h2techniques import H2_TECHNIQUES, h2_technique_by_name
 from doppelganger.reporting import to_h1md
 from doppelganger.sarif import to_sarif
@@ -41,9 +42,10 @@ from doppelganger.techniques import all_techniques, technique_by_name
 # h2techniques above is deliberately hpack-free at import time.
 
 # Technique selection: the HTTP/1.1 desync family (criterion 1), the v0.2
-# HTTP/2-downgrade family (H2.CL / H2.TE), plus "all" (HTTP/1.1 only -- H2
-# probes need an h2 front-end and are opt-in per technique).
-_TECHNIQUE_CHOICES = (*TECHNIQUES, *H2_TECHNIQUES, "all")
+# HTTP/2-downgrade family (H2.CL / H2.TE), the v0.3 H2C cleartext-upgrade
+# probe (H2C), plus "all" (HTTP/1.1 only -- H2/H2C probes are opt-in because
+# they require specific server capabilities and are targeted, not sweeping).
+_TECHNIQUE_CHOICES = (*TECHNIQUES, *H2_TECHNIQUES, *H2C_TECHNIQUES, "all")
 
 # Output formats doppelganger emits (criterion 6).
 _FORMAT_CHOICES = ("json", "sarif", "h1md")
@@ -178,10 +180,31 @@ def run(args: argparse.Namespace) -> int:
         print(f"error: could not parse target URL: {args.target!r}", file=sys.stderr)
         return 3
 
-    # Route H2-downgrade techniques (H2.CL / H2.TE) to the dedicated H2 engine
-    # (lazily imported); everything else stays on the audited v0.1 HTTP/1.1
-    # engine. Both engines expose the same run()/suppressed surface.
-    if args.technique in H2_TECHNIQUES:
+    # Route H2-downgrade techniques (H2.CL / H2.TE) to the dedicated H2 engine;
+    # H2C cleartext-upgrade to the H2C engine; everything else stays on the
+    # audited HTTP/1.1 engine. All engines expose the same findings/suppressed
+    # surface.
+    if args.technique in H2C_TECHNIQUES:
+        from doppelganger.h2c import H2CEngine
+
+        engine = H2CEngine(
+            args.target,
+            scope=scope,
+            timeout=args.timeout,
+            safe=args.safe,
+        )
+        try:
+            findings = engine.run()
+        except OutOfScopeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        except OSError as exc:
+            print(
+                f"error: could not reach target {args.target!r}: {exc}",
+                file=sys.stderr,
+            )
+            return 3
+    elif args.technique in H2_TECHNIQUES:
         from doppelganger.h2engine import H2DesyncEngine
         from doppelganger.h2send import H2NotSupportedError
 
