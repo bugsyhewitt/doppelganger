@@ -72,7 +72,7 @@ when any finding is produced, `0` when clean, `3` on a scope/target error.
 
 ```
 URL                        target URL to probe (positional)
---technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,H2.CL,H2.TE,all}
+--technique {CL.TE,TE.CL,TE.TE,CL.0,dup-CL,TE.chunk,H2.CL,H2.TE,all}
                            which desync technique to probe (default: all).
                            `all` covers the HTTP/1.1 family; the HTTP/2-downgrade
                            techniques (H2.CL, H2.TE) are opt-in per technique
@@ -85,20 +85,39 @@ URL                        target URL to probe (positional)
 --no-reuse-connection      force per-probe connection isolation (default)
 --format {json,sarif,h1md} output format (default: json)
 --timeout SECONDS          per-request timeout (default: 10.0)
---version                  print "doppelganger 0.2.0"
+--version                  print "doppelganger 0.4.0"
 ```
 
 ### Techniques
 
-HTTP/1.1 desync family (v0.1):
+HTTP/1.1 desync family (v0.1 + v0.4 parser-discrepancy expansion):
 
 | Technique | Discrepancy | Since |
 |-----------|-------------|-------|
 | `CL.TE`   | Front-end uses Content-Length, back-end uses Transfer-Encoding | v0.1 |
 | `TE.CL`   | Front-end uses Transfer-Encoding, back-end uses Content-Length | v0.1 |
-| `TE.TE`   | Both use TE, one is fooled by an obfuscated header (8-entry dictionary) | v0.1 |
+| `TE.TE`   | Both use TE, one is fooled by an obfuscated header (13-entry dictionary) | v0.1 |
 | `CL.0`    | Content-Length honoured by front-end, treated as 0 by back-end | v0.1 |
 | `dup-CL`  | Two conflicting Content-Length headers | v0.1 |
+| `TE.chunk` | Both sides see chunked TE, but parse the chunk body differently — chunk extensions (`chunk-ext`) or bare-CR line endings (`bare-cr`) | v0.4 |
+
+**TE.TE obfuscation dictionary (13 entries):** the standard 8 header-value mutations
+(space/tab/vertical-tab before colon; duplicate identity+chunked; chunked+identity
+comma; xchunked; quoted value; leading space) plus 5 new v0.4 parser-discrepancy
+entries: `mixed-case` (`Chunked`), `null-byte` (null after value), `bare-cr-end`
+(bare CR at end of header value), `ows-trailer` (trailing OWS), and `comma-chunk`
+(comma-prefix list entry).
+
+**TE.chunk chunk-body dictionary (2 entries):** probes where both sides see a
+standard `Transfer-Encoding: chunked` header but the front-end forwards N bytes
+via Content-Length and the back-end attempts to parse those bytes as chunks:
+- `chunk-ext` — chunk size line carries a semicolon extension (`1;x=p\r\nA`);
+  lenient back-ends strip the extension and parse normally; strict back-ends reject
+  the non-hex token. The differential attack uses an extension-annotated data chunk
+  before the standard `0\r\n\r\n` terminator.
+- `bare-cr` — chunk line endings use bare CR (`\r`) instead of CRLF; strict
+  parsers cannot find the chunk boundary and hang (timing candidate); lenient
+  parsers consume the chunk and leave the smuggled prefix.
 
 HTTP/2-downgrade family (v0.2) -- an HTTP/2 front-end that forwards to an
 HTTP/1.1 back-end, desynced via a header the H2 layer never honours:
@@ -216,14 +235,23 @@ HTTP/2 front-end -> HTTP/1.1 back-end downgrade desync, wired to `--technique
 H2.CL` / `H2.TE`. Proven hermetically against an in-process downgrade mock; a
 live vulnerable proxy runs behind the `integration` marker.
 
+**v0.3 (landed): H2C cleartext-upgrade detection.** Probes HTTP/1.1 front-ends
+for `Upgrade: h2c` acceptance (RFC 7540 §3.2) and confirms genuine H2 capability
+by completing the connection handshake (client preface + SETTINGS exchange). Wired
+to `--technique H2C`.
+
+**v0.4 (landed): Parser-discrepancy probe expansion.** Expands the TE.TE
+obfuscation dictionary from 8 to 13 header-level entries (mixed-case, null-byte,
+bare-CR end, trailing OWS, comma-prefix list). Adds the `TE.chunk` technique
+family -- two chunk-body-level variants (`chunk-ext`, `bare-cr`) that probe
+parser discrepancy at the chunk framing level rather than the TE header level.
+
 **Still deferred:**
 
-- **H2C** cleartext-upgrade smuggling -> a separate edge-proxy-bypass attack
-  class; next after the H2-downgrade family.
 - **Client-side / browser-powered desync (CSD)** -> needs a victim browser; out
   of scope for a headless CLI.
 - **0.CL, double-desync, Expect-based desync, early-response gadgets**
-  ("HTTP/1.1 Must Die") -> v0.3.
+  ("HTTP/1.1 Must Die") -> next.
 - **Parser-discrepancy V-H/H-V engine** (HRS v3 flagship) -> research-grade
   sub-project.
 - **Full weaponization** (cache poisoning, request capture, PoC chaining) --
