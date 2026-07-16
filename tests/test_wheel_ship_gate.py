@@ -64,9 +64,10 @@ def test_wheel_installs_into_fresh_venv(tmp_path):
     venv.create(venv_dir, with_pip=True, clear=True)
     pip = venv_dir / "bin" / "pip"
 
-    # Install the shared libs locally first (pulls httpx), then the wheel with
-    # --no-deps so the git-URL deps in pyproject.toml are not fetched.
-    _run([str(pip), "install", "--quiet", *[str(s) for s in _SIBLINGS]])
+    # Install the shared libs locally first (pulls httpx), plus h2>=4.1 (the only
+    # remaining PyPI runtime dep), then the wheel with --no-deps so the git-URL
+    # deps in pyproject.toml are not fetched from GitHub.
+    _run([str(pip), "install", "--quiet", *[str(s) for s in _SIBLINGS], "h2>=4.1"])
     _run([str(pip), "install", "--quiet", "--no-deps", str(wheel)])
 
     cli = venv_dir / "bin" / "doppelganger"
