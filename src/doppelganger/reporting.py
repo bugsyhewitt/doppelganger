@@ -112,8 +112,8 @@ def _to_h1_finding(f: Finding) -> H1Finding:
 def _summary_section(stats: dict) -> str:
     """Build a ``## Scan Summary`` markdown footer from scan-level statistics."""
     lines: list[str] = ["", "## Scan Summary", ""]
-    lines.append(f"| Metric | Value |")
-    lines.append(f"|--------|-------|")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
     lines.append(f"| Targets scanned | {stats['targets_scanned']} |")
     if stats.get("targets_errored"):
         lines.append(f"| Targets errored | {stats['targets_errored']} |")

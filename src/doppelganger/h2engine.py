@@ -43,9 +43,9 @@ from urllib.parse import urlsplit
 
 from scan_primitives import Scope
 
-from doppelganger.engine import ResponseSignature, _DEFAULT_DELTA_MS, _EVIDENCE_CAP
+from doppelganger.engine import _DEFAULT_DELTA_MS, _EVIDENCE_CAP, ResponseSignature
 from doppelganger.findings import CWE_REQUEST_SMUGGLING, Finding
-from doppelganger.h2send import H2NotSupportedError, H2Request, H2Response, H2Sender
+from doppelganger.h2send import H2Request, H2Response, H2Sender
 from doppelganger.h2techniques import H2Technique, all_h2_techniques
 
 __all__ = ["H2DesyncEngine"]
