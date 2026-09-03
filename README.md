@@ -390,6 +390,10 @@ techniques in this release; the focus is correctness, release hygiene, and the
 - **Full weaponization** (cache poisoning, request capture, PoC chaining) --
   doppelganger is a detection/confirmation tool and stays one.
 
+See [`POST_V01.md`](POST_V01.md) for detailed write-ups on each deferred item
+— what it is, why it matters, and its prerequisites. See [`CHANGELOG.md`](CHANGELOG.md)
+for the full version-by-version history of what shipped.
+
 ## License & Attribution
 
 MIT -- see [LICENSE](LICENSE).
