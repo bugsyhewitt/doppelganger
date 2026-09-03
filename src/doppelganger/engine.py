@@ -36,7 +36,7 @@ handed to a shell / LLM tool call.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from scan_primitives import Scope

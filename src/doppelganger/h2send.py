@@ -44,10 +44,9 @@ import random
 import socket
 import ssl
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from hpack import Decoder  # part of the h2 dependency stack
-
 from scan_primitives import OutOfScopeError, Scope
 
 __all__ = [
